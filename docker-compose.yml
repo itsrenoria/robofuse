@@ -1,0 +1,10 @@
+services:
+  robofuse:
+    build: .
+    container_name: robofuse
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/data/config.json
+      - ./Library:/app/Library
+      - ./Organized:/app/Organized
+      - ./cache:/app/cache

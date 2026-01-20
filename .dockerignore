@@ -1,0 +1,31 @@
+# Ignore cache, data, and generated files
+cache/
+Library/
+Organized/
+logs/
+*.log
+
+# Go binary
+robofuse
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# macOS
+.DS_Store
+
+# Documentation (not needed in image)
+*.md

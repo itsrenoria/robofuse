@@ -1,0 +1,19 @@
+{
+  "token": "YOUR_REAL_DEBRID_API_TOKEN",
+  "output_dir": "./Library",
+  "organized_dir": "./Organized",
+  "cache_dir": "./cache",
+  "tracking_file": "./cache/file_tracking.json",
+  "file_expiry_days": 6,
+  "retry_queue_file": "./cache/retry_queue.json",
+  "max_retry_attempts": 3,
+  "concurrent_requests": 50,
+  "general_rate_limit": 250,
+  "torrents_rate_limit": 25,
+  "watch_mode": false,
+  "watch_mode_interval": 60,
+  "repair_torrents": true,
+  "min_file_size_mb": 150,
+  "ptt_rename": true,
+  "log_level": "info"
+}
