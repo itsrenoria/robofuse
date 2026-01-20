@@ -1,0 +1,24 @@
+# Cache and data files
+cache/
+Library/
+Organized/
+logs/
+*.log
+
+# Binary
+robofuse
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
