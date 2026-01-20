@@ -1,0 +1,64 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Libraries and cache directories
+Library/
+cache/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Additional cache and temporary files
+.pytest_cache/
+.mypy_cache/
+.tox/
+.cache/
+*.tmp
+*.temp
+*.pid
+*.lock
+*.log
+logs/
+
+# Docker files (not needed in the build context)
+docker-compose.yml
+.dockerignore
+
+# Test files
+test_*
+tests/ 

@@ -1,0 +1,15 @@
+services:
+  robofuse:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: robofuse
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json
+      - ./cache:/app/cache
+      - ./Library:/app/Library
+    environment:
+      - TZ=UTC  # Set your timezone here, e.g., America/New_York
+    # Uncomment to set custom command or parameters
+    # command: python -m robofuse watch --interval 600 --verbosity info 
