@@ -6,7 +6,7 @@ logs/
 *.log
 
 # Binary
-robofuse
+/robofuse
 
 # macOS
 .DS_Store
