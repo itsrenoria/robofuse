@@ -473,11 +473,8 @@ func (s *Service) runOrganizer() OrganizerResult {
 
 	scriptPath := filepath.Join("scripts", "organize.py")
 
-	// Find Python 3
+	// Find Python 3 (in Docker, this is always available)
 	pythonPath := "python3"
-	if _, err := exec.LookPath(pythonPath); err != nil {
-		s.logger.Warn().Msg("Python3 not found in PATH")
-	}
 
 	cmd := exec.Command(pythonPath, scriptPath)
 	cmd.Dir = s.config.Path
