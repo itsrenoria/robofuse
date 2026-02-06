@@ -12,35 +12,28 @@ COPY . .
 # Build
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o robofuse ./cmd/robofuse
 
-# Final stage
-FROM python:3.12-alpine
+# Final stage - pure Alpine (no Python needed!)
+FROM alpine:3.19
 
-# Install dependencies
-RUN apk --no-cache add ca-certificates tzdata git
+# Install minimal dependencies
+RUN apk --no-cache add ca-certificates tzdata
 
 WORKDIR /app
 
 # Copy Go binary from builder
 COPY --from=builder /app/robofuse .
 
-# Copy Python scripts and requirements
-COPY scripts/ ./scripts/
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
 # Create directories
-RUN mkdir -p /data /app/Library /app/Organized /app/cache
+RUN mkdir -p /data /app/library /app/library-organized /app/cache
 
 # Volume for config
 VOLUME ["/data"]
 
 # Volume for STRM output
-VOLUME ["/app/Library"]
+VOLUME ["/app/library"]
 
 # Volume for organized output
-VOLUME ["/app/Organized"]
+VOLUME ["/app/library-organized"]
 
 # Volume for cache
 VOLUME ["/app/cache"]

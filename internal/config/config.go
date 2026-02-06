@@ -45,8 +45,8 @@ type Config struct {
 func defaults() *Config {
 	return &Config{
 		Token:              "",
-		OutputDir:          "./Library",
-		OrganizedDir:       "./Organized",
+		OutputDir:          "./library",
+		OrganizedDir:       "./library-organized",
 		CacheDir:           "./cache",
 		ConcurrentRequests: 32,
 		GeneralRateLimit:   60,

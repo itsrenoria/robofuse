@@ -5,6 +5,6 @@ services:
     restart: unless-stopped
     volumes:
       - ./config.json:/data/config.json
-      - ./Library:/app/Library
-      - ./Organized:/app/Organized
+      - ./library:/app/library
+      - ./library-organized:/app/library-organized
       - ./cache:/app/cache

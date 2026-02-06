@@ -71,7 +71,8 @@ func (s *Service) Track(relativePath, downloadURL, link, torrentID string) {
 	}
 }
 
-// GetExpired returns tracking data for files older than the specified duration
+// GetExpired returns tracking data for files older than the specified duration.
+// Uses LastChecked when available; falls back to CreatedAt if LastChecked is zero.
 func (s *Service) GetExpired(olderThan time.Duration) []*FileTracking {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -80,7 +81,11 @@ func (s *Service) GetExpired(olderThan time.Duration) []*FileTracking {
 	var expired []*FileTracking
 
 	for _, tracking := range s.data {
-		if tracking.CreatedAt.Before(threshold) {
+		basis := tracking.LastChecked
+		if basis.IsZero() {
+			basis = tracking.CreatedAt
+		}
+		if basis.Before(threshold) {
 			expired = append(expired, tracking)
 		}
 	}
@@ -138,7 +143,7 @@ func (s *Service) Load() error {
 		return err
 	}
 
-	s.logger.Info().Int("count", len(s.data)).Msg("Loaded tracking data")
+	s.logger.Debug().Int("count", len(s.data)).Msg("Loaded tracking data")
 	return nil
 }
 

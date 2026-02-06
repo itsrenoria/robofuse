@@ -159,7 +159,7 @@ func (q *Queue) Load() error {
 		return err
 	}
 
-	q.logger.Info().Int("count", len(q.items)).Msg("Loaded retry queue")
+	q.logger.Debug().Int("count", len(q.items)).Msg("Loaded retry queue")
 	return nil
 }
 

@@ -1,2 +1,0 @@
-# Python 3.10+ required
-parsett @ git+https://github.com/dreulavelle/PTT.git

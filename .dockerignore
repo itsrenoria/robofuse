@@ -8,13 +8,6 @@ logs/
 # Go binary
 robofuse
 
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-venv/
-
 # Git
 .git/
 .gitignore
@@ -29,3 +22,6 @@ venv/
 
 # Documentation (not needed in image)
 *.md
+
+# Separate repos (not part of robofuse docker image)
+ptt-go/

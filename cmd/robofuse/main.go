@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/robofuse/robofuse/internal/config"
 	"github.com/robofuse/robofuse/internal/logger"
@@ -64,19 +63,30 @@ func main() {
 	log := logger.Default()
 
 	// Print banner
-	printBanner()
+	if logger.IsTTY() && logger.IsInfoEnabled() {
+		printBanner()
+	}
 
 	switch command {
 	case "run":
-		log.Info().Msg("Starting single sync run...")
+		log.Info().Msg("run | mode=once dry=false")
+		if logger.IsInfoEnabled() && logger.IsTTY() {
+			fmt.Println()
+		}
 		runSync(cfg, false)
 
 	case "watch":
-		log.Info().Msgf("Starting watch mode (interval: %ds)...", cfg.WatchModeInterval)
+		log.Info().Msgf("run | mode=watch interval=%ds", cfg.WatchModeInterval)
+		if logger.IsInfoEnabled() && logger.IsTTY() {
+			fmt.Println()
+		}
 		runWatch(cfg)
 
 	case "dry-run", "dryrun":
-		log.Info().Msg("Starting dry run (no changes will be made)...")
+		log.Info().Msg("run | mode=once dry=true")
+		if logger.IsInfoEnabled() && logger.IsTTY() {
+			fmt.Println()
+		}
 		runSync(cfg, true)
 
 	default:
@@ -124,7 +134,7 @@ Examples:
 
 func runSync(cfg *config.Config, dryRun bool) {
 	log := logger.Default()
-	
+
 	service := sync.New(cfg)
 	result, err := service.Run(dryRun)
 	if err != nil {
@@ -132,59 +142,37 @@ func runSync(cfg *config.Config, dryRun bool) {
 		os.Exit(1)
 	}
 
-	printSummary(result, dryRun)
+	summary := sync.FormatSummary(result, sync.SummaryOptions{
+		DryRun:     dryRun,
+		IncludeOrg: cfg.PttRename && !dryRun,
+	})
+
+	if logger.IsInfoEnabled() {
+		if logger.IsTTY() {
+			fmt.Println()
+		}
+		log.Info().Msg(summary)
+	} else {
+		if logger.IsTTY() {
+			fmt.Println()
+		}
+		switch logger.GetLogLevel() {
+		case "error":
+			log.Error().Msg(summary)
+		case "warn":
+			log.Warn().Msg(summary)
+		default:
+			log.Info().Msg(summary)
+		}
+	}
 }
 
 func runWatch(cfg *config.Config) {
 	log := logger.Default()
-	
+
 	service := sync.New(cfg)
 	if err := service.Watch(); err != nil {
 		log.Error().Err(err).Msg("Watch mode failed")
 		os.Exit(1)
 	}
-}
-
-func printSummary(result *sync.RunResult, dryRun bool) {
-	log := logger.Default()
-	
-	mode := "Sync"
-	if dryRun {
-		mode = "Dry Run"
-	}
-
-	log.Info().Msg("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Info().Msgf("                    %s Complete", mode)
-	log.Info().Msg("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Info().Msgf("  Duration:          %s", result.Duration.Round(time.Millisecond))
-	log.Info().Msg("")
-	log.Info().Msg("  Downloads:")
-	log.Info().Msgf("    Total:           %d", result.TorrentsTotal)
-	log.Info().Msgf("    Downloaded:      %d", result.TorrentsDownloaded)
-	log.Info().Msgf("    Dead:            %d", result.TorrentsDead)
-	log.Info().Msgf("    Repaired:        %d", result.TorrentsRepaired)
-	log.Info().Msg("")
-	log.Info().Msg("  Links:")
-	log.Info().Msgf("    Unrestricted:    %d", result.LinksUnrestricted)
-	log.Info().Msgf("    Failed:          %d", result.LinksFailed)
-	log.Info().Msg("")
-	log.Info().Msg("  STRM Files:")
-	log.Info().Msgf("    Added:           %d", result.STRMAdded)
-	log.Info().Msgf("    Updated:         %d", result.STRMUpdated)
-	log.Info().Msgf("    Deleted:         %d", result.STRMDeleted)
-	log.Info().Msgf("    Skipped:         %d", result.STRMSkipped)
-	
-	if result.OrgProcessed > 0 {
-		log.Info().Msg("")
-		log.Info().Msg("  Organized:")
-		log.Info().Msgf("    Processed:       %d", result.OrgProcessed)
-		log.Info().Msgf("    New:             %d", result.OrgNew)
-		log.Info().Msgf("    Updated:         %d", result.OrgUpdated)
-		log.Info().Msgf("    Deleted:         %d", result.OrgDeleted)
-		if result.OrgErrors > 0 {
-			log.Info().Msgf("    Errors:          %d", result.OrgErrors)
-		}
-	}
-	
-	log.Info().Msg("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 }

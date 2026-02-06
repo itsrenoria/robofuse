@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -27,6 +28,31 @@ func SetLogPath(path string) {
 // SetLogLevel sets the global log level
 func SetLogLevel(level string) {
 	logLevel = strings.ToLower(level)
+}
+
+// GetLogLevel returns the current log level as a string.
+func GetLogLevel() string {
+	return logLevel
+}
+
+// IsDebugEnabled reports whether debug-level logs are enabled.
+func IsDebugEnabled() bool {
+	return logLevel == "debug" || logLevel == "trace"
+}
+
+// IsInfoEnabled reports whether info-level logs are enabled.
+func IsInfoEnabled() bool {
+	switch logLevel {
+	case "debug", "trace", "info":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsTTY reports whether stdout is attached to a terminal.
+func IsTTY() bool {
+	return isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 }
 
 // GetLogPath returns the full path to the log file

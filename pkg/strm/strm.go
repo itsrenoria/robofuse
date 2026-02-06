@@ -36,6 +36,7 @@ type SyncResult struct {
 	Updated int
 	Deleted int
 	Skipped int
+	Tracked int
 }
 
 // Sync synchronizes STRM files with the candidate list
@@ -127,12 +128,14 @@ func (s *Service) Sync(candidates []realdebrid.STRMCandidate, dryRun bool) (*Syn
 		}
 	}
 
-	s.logger.Info().
+	result.Tracked = s.tracking.Count()
+
+	s.logger.Debug().
 		Int("added", result.Added).
 		Int("updated", result.Updated).
 		Int("deleted", result.Deleted).
 		Int("skipped", result.Skipped).
-		Int("tracked", s.tracking.Count()).
+		Int("tracked", result.Tracked).
 		Bool("dryRun", dryRun).
 		Msg("STRM sync completed")
 

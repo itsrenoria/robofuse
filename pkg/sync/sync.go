@@ -1,17 +1,16 @@
 package sync
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/robofuse/robofuse/internal/config"
+	"github.com/robofuse/robofuse/internal/console"
 	"github.com/robofuse/robofuse/internal/logger"
 	"github.com/robofuse/robofuse/internal/request"
+	"github.com/robofuse/robofuse/pkg/organizer"
 	"github.com/robofuse/robofuse/pkg/realdebrid"
 	"github.com/robofuse/robofuse/pkg/repair"
 	"github.com/robofuse/robofuse/pkg/retry"
@@ -56,8 +55,10 @@ type RunResult struct {
 	TorrentsDead       int
 	TorrentsRepaired   int
 	DownloadsTotal     int
+	DownloadsAfter     int
 	LinksUnrestricted  int
 	LinksFailed        int
+	LinksQueued        int
 	STRMAdded          int
 	STRMUpdated        int
 	STRMDeleted        int
@@ -76,7 +77,7 @@ func (s *Service) Run(dryRun bool) (*RunResult, error) {
 	startTime := time.Now()
 	result := &RunResult{}
 
-	s.logger.Info().Msg("Starting sync...")
+	s.logger.Debug().Msg("Starting sync...")
 
 	// Step 1: Fetch all torrents
 	s.logger.Debug().Msg("Fetching torrents...")
@@ -148,13 +149,22 @@ func (s *Service) Run(dryRun bool) (*RunResult, error) {
 		Int("missing", len(missingLinks)).
 		Msg("Link matching complete")
 
+	if logger.IsInfoEnabled() {
+		s.logger.Info().Msgf("discovery | torrents_downloaded=%d torrents_dead=%d downloads_cached=%d missing_links=%d",
+			result.TorrentsDownloaded, result.TorrentsDead, result.DownloadsTotal, len(missingLinks))
+		if logger.IsTTY() {
+			fmt.Println()
+		}
+	}
+
 	// Step 6: Unrestrict missing links
 	if len(missingLinks) > 0 {
 		s.logger.Debug().Int("count", len(missingLinks)).Msg("Unrestricting missing links...")
 
-		unrestricted, failed := s.unrestrictLinks(missingLinks, dryRun)
+		unrestricted, failed, queued := s.unrestrictLinks(missingLinks, dryRun)
 		result.LinksUnrestricted = len(unrestricted)
 		result.LinksFailed = len(failed)
+		result.LinksQueued = queued
 
 		// Add new downloads to map
 		for _, d := range unrestricted {
@@ -171,10 +181,17 @@ func (s *Service) Run(dryRun bool) (*RunResult, error) {
 		}
 	}
 
+	result.DownloadsAfter = len(s.downloadMap)
+
 	// Step 7: Build STRM candidates (reuse existing slice)
 	s.logger.Debug().Msg("Building STRM candidates...")
-	s.candidates = s.buildCandidatesInto(downloaded, s.downloadMap, s.candidates[:0])
+	var stats candidateStats
+	s.candidates = s.buildCandidatesInto(downloaded, s.downloadMap, s.candidates[:0], &stats)
 	s.logger.Debug().Int("count", len(s.candidates)).Msg("STRM candidates ready")
+
+	if logger.IsInfoEnabled() {
+		s.logger.Info().Msgf("strm_sync | candidates=%d filtered_small=%d filtered_other=%d", stats.Candidates, stats.FilteredSmall, stats.FilteredOther)
+	}
 
 	// Step 8: Sync STRM files
 	s.logger.Debug().Msg("Syncing STRM files...")
@@ -186,10 +203,17 @@ func (s *Service) Run(dryRun bool) (*RunResult, error) {
 	result.STRMUpdated = strmResult.Updated
 	result.STRMDeleted = strmResult.Deleted
 	result.STRMSkipped = strmResult.Skipped
+	if logger.IsInfoEnabled() {
+		s.logger.Info().Msgf("strm_results | created=%d updated=%d removed=%d unchanged=%d tracked=%d",
+			result.STRMAdded, result.STRMUpdated, result.STRMDeleted, result.STRMSkipped, strmResult.Tracked)
+		if logger.IsTTY() {
+			fmt.Println()
+		}
+	}
 
 	result.Duration = time.Since(startTime)
 
-	s.logger.Info().
+	s.logger.Debug().
 		Int("strm_added", result.STRMAdded).
 		Int("strm_updated", result.STRMUpdated).
 		Int("strm_deleted", result.STRMDeleted).
@@ -204,6 +228,10 @@ func (s *Service) Run(dryRun bool) (*RunResult, error) {
 		result.OrgDeleted = orgResult.Deleted
 		result.OrgUpdated = orgResult.Updated
 		result.OrgErrors = orgResult.Errors
+		if logger.IsInfoEnabled() {
+			s.logger.Info().Msgf("organizer | processed=%d created=%d updated=%d removed=%d skipped=%d errors=%d",
+				orgResult.Processed, orgResult.New, orgResult.Updated, orgResult.Deleted, orgResult.Skipped, orgResult.Errors)
+		}
 	}
 
 	// Refresh expiring links (works in both manual and watch mode)
@@ -288,22 +316,16 @@ func (s *Service) refreshExpiringLinks(interval time.Duration) {
 
 // printCycleSummary prints a clean cycle summary to stdout
 func (s *Service) printCycleSummary(result *RunResult, interval time.Duration) {
-	fmt.Println()
-	fmt.Println("─────────────────────────────────────────────")
-	fmt.Println("Cycle Summary")
-	fmt.Printf("  Torrents: %d (%d dead, %d repaired)\n",
-		result.TorrentsTotal, result.TorrentsDead, result.TorrentsRepaired)
-	fmt.Printf("  Downloads: %d cached\n", result.DownloadsTotal)
-	if result.LinksUnrestricted > 0 || result.LinksFailed > 0 {
-		fmt.Printf("  Links: %d unrestricted, %d failed\n",
-			result.LinksUnrestricted, result.LinksFailed)
+	summary := FormatSummary(result, SummaryOptions{
+		IncludeOrg: s.config.PttRename,
+		NextRun:    time.Now().Add(interval),
+	})
+
+	if logger.IsInfoEnabled() {
+		s.logger.Info().Msg(summary)
+	} else {
+		fmt.Println(summary)
 	}
-	strmTotal := result.STRMAdded + result.STRMUpdated + result.STRMSkipped
-	fmt.Printf("  STRM: %d tracked (+%d/-%d/~%d)\n",
-		strmTotal, result.STRMAdded, result.STRMDeleted, result.STRMUpdated)
-	fmt.Printf("  Duration: %s\n", result.Duration.Round(time.Millisecond))
-	fmt.Printf("  Next: %s\n", time.Now().Add(interval).Format("15:04:05"))
-	fmt.Println("─────────────────────────────────────────────")
 }
 
 // missingLink represents a link that needs unrestriction
@@ -313,16 +335,23 @@ type missingLink struct {
 }
 
 // unrestrictLinks unrestricts multiple links concurrently
-func (s *Service) unrestrictLinks(links []missingLink, dryRun bool) ([]*realdebrid.Download, []string) {
+func (s *Service) unrestrictLinks(links []missingLink, dryRun bool) ([]*realdebrid.Download, []string, int) {
 	if dryRun {
 		s.logger.Info().Int("count", len(links)).Msg("[DRY-RUN] Would unrestrict links")
-		return nil, nil
+		return nil, nil, 0
 	}
 
 	var mu sync.Mutex
 	var results []*realdebrid.Download
 	var failed []string
 	completed := 0
+	queued := 0
+	var progress *console.ProgressBar
+
+	if logger.IsInfoEnabled() && logger.IsTTY() && !logger.IsDebugEnabled() {
+		progress = console.NewProgressBar("Unrestricting links", len(links))
+		progress.Update(0)
+	}
 
 	pool := worker.NewPool(s.config.ConcurrentRequests)
 
@@ -340,6 +369,7 @@ func (s *Service) unrestrictLinks(links []missingLink, dryRun bool) ([]*realdebr
 				if isRetryableError(err) {
 					// Add to retry queue for next cycle
 					s.addToRetryQueue(ml.link, ml.torrent, err)
+					queued++
 					s.logger.Debug().
 						Str("filename", ml.torrent.Filename).
 						Msg("Added to retry queue (retryable error)")
@@ -353,8 +383,9 @@ func (s *Service) unrestrictLinks(links []missingLink, dryRun bool) ([]*realdebr
 				results = append(results, download)
 			}
 
-			// Progress logging every 100 items
-			if completed%100 == 0 || completed == len(links) {
+			if progress != nil {
+				progress.Update(completed)
+			} else if completed%100 == 0 || completed == len(links) {
 				s.logger.Info().
 					Int("completed", completed).
 					Int("total", len(links)).
@@ -374,12 +405,23 @@ func (s *Service) unrestrictLinks(links []missingLink, dryRun bool) ([]*realdebr
 		}
 	}
 
-	return results, failed
+	return results, failed, queued
 }
 
-// buildCandidatesInto builds STRM candidates from torrents and downloads, reusing the provided slice
-func (s *Service) buildCandidatesInto(torrents []*realdebrid.Torrent, downloadMap map[string]*realdebrid.Download, candidates []realdebrid.STRMCandidate) []realdebrid.STRMCandidate {
+type candidateStats struct {
+	Candidates    int
+	FilteredSmall int
+	FilteredOther int
+}
+
+// buildCandidatesInto builds STRM candidates from torrents and downloads, reusing the provided slice.
+func (s *Service) buildCandidatesInto(torrents []*realdebrid.Torrent, downloadMap map[string]*realdebrid.Download, candidates []realdebrid.STRMCandidate, stats *candidateStats) []realdebrid.STRMCandidate {
 	minSize := s.config.MinFileSizeBytes()
+	if stats != nil {
+		stats.Candidates = 0
+		stats.FilteredSmall = 0
+		stats.FilteredOther = 0
+	}
 
 	for _, torrent := range torrents {
 		for _, link := range torrent.Links {
@@ -394,6 +436,9 @@ func (s *Service) buildCandidatesInto(torrents []*realdebrid.Torrent, downloadMa
 
 			// Apply size filter ONLY to videos (not subtitles)
 			if isVid && download.Filesize < minSize {
+				if stats != nil {
+					stats.FilteredSmall++
+				}
 				s.logger.Debug().
 					Str("filename", download.Filename).
 					Int64("size_mb", download.Filesize/(1024*1024)).
@@ -404,6 +449,9 @@ func (s *Service) buildCandidatesInto(torrents []*realdebrid.Torrent, downloadMa
 
 			// Skip non-video, non-subtitle files
 			if !isVid && !isSub {
+				if stats != nil {
+					stats.FilteredOther++
+				}
 				s.logger.Debug().
 					Str("filename", download.Filename).
 					Msg("Skipping non-video, non-subtitle file")
@@ -421,6 +469,9 @@ func (s *Service) buildCandidatesInto(torrents []*realdebrid.Torrent, downloadMa
 		}
 	}
 
+	if stats != nil {
+		stats.Candidates = len(candidates)
+	}
 	return candidates
 }
 
@@ -457,7 +508,7 @@ func countTotalLinks(torrents []*realdebrid.Torrent) int {
 	return count
 }
 
-// OrganizerResult contains stats from the Python organizer
+// OrganizerResult contains stats from the organizer.
 type OrganizerResult struct {
 	Processed int `json:"processed"`
 	New       int `json:"new"`
@@ -467,30 +518,35 @@ type OrganizerResult struct {
 	Errors    int `json:"errors"`
 }
 
-// runOrganizer executes the Python script to organize files
+// runOrganizer executes the Go organizer to organize files using PTT-Go.
 func (s *Service) runOrganizer() OrganizerResult {
 	s.logger.Debug().Msg("Running library organizer...")
 
-	scriptPath := filepath.Join("scripts", "organize.py")
+	org := organizer.New(organizer.Config{
+		BaseDir:      s.config.Path,
+		OrganizedDir: s.config.OrganizedDir,
+		OutputDir:    s.config.OutputDir,
+		TrackingFile: s.config.TrackingFile,
+		CacheDir:     s.config.CacheDir,
+		Logger:       s.logger,
+	})
 
-	// Find Python 3 (in Docker, this is always available)
-	pythonPath := "python3"
+	result := org.Run()
 
-	cmd := exec.Command(pythonPath, scriptPath)
-	cmd.Dir = s.config.Path
+	s.logger.Debug().
+		Int("processed", result.Processed).
+		Int("new", result.New).
+		Int("deleted", result.Deleted).
+		Int("skipped", result.Skipped).
+		Int("errors", result.Errors).
+		Msg("Organizer completed")
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		s.logger.Error().Err(err).Msg("Organizer failed")
-		return OrganizerResult{}
+	return OrganizerResult{
+		Processed: result.Processed,
+		New:       result.New,
+		Deleted:   result.Deleted,
+		Updated:   result.Updated,
+		Skipped:   result.Skipped,
+		Errors:    result.Errors,
 	}
-
-	// Parse JSON output
-	var result OrganizerResult
-	if err := json.Unmarshal(output, &result); err != nil {
-		s.logger.Warn().Err(err).Str("output", string(output)).Msg("Failed to parse organizer output")
-		return OrganizerResult{}
-	}
-
-	return result
 }

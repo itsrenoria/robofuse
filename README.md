@@ -73,8 +73,8 @@ Edit `config.json` to customize robofuse:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `token` | string | **Required** | Your Real-Debrid API Token. |
-| `output_dir` | string | `./Library` | Where raw STRM files will be generated. |
-| `organized_dir` | string | `./Organized` | Where renamed/organized STRM files will be placed if `ptt_rename` is set to `true`. |
+| `output_dir` | string | `./library` | Where raw STRM files will be generated. |
+| `organized_dir` | string | `./library-organized` | Where renamed/organized STRM files will be placed if `ptt_rename` is set to `true`. |
 | `cache_dir` | string | `./cache` | Directory for storing state/cache. |
 | `concurrent_requests`* | int | `50` | Max concurrent worker threads for processing. |
 | `general_rate_limit`* | int | `250` | Request limit per minute for general API calls. |
@@ -88,6 +88,9 @@ Edit `config.json` to customize robofuse:
 | `file_expiry_days` | int | `6` | Days to consider a file as expired from downloads in real-debrid. |
 
 \* These rate limits are conservative defaults that work well for large libraries. You can push higher (e.g. `600`+ for general, `100`+ concurrent) but YMMV depending on your library size and Real-Debrid's current load.
+
+> [!IMPORTANT]
+> Don't delete `library`, `library-organized`, or `cache` by hand. These folders are part of the state/tracking system. If you need to reset, stop the service, back up what you need, then clear them intentionally.
 
 ---
 
@@ -105,8 +108,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./config.json:/data/config.json
-      - ./Library:/app/Library
-      - ./Organized:/app/Organized
+      - ./library:/app/library
+      - ./library-organized:/app/library-organized
       - ./cache:/app/cache
 ```
 
@@ -142,7 +145,7 @@ robofuse is a passion project developed and maintained for free. If you find it 
 
 This project wouldn't be possible without the foundational work of the open-source community.
 
-- **[PTT (Parsett)](https://github.com/dreulavelle/PTT)**: For their excellent filename parsing logic, which powers our metadata organization.
+- **[PTT-Go](https://github.com/itsrenoria/PTT-Go)**: Our Go port of the excellent [dreulavelle/PTT](https://github.com/dreulavelle/PTT) filename parsing library.
 - **[Decypharr](https://github.com/sirrobot01/decypharr)**: Portions of this codebase were inspired by or repurposed from Decypharr (Copyright (c) 2025 Mukhtar Akere), used under the MIT License.
 
 ---
