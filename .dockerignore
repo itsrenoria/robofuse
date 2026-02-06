@@ -2,6 +2,8 @@
 cache/
 Library/
 Organized/
+library/
+library-organized/
 logs/
 *.log
 
@@ -20,8 +22,16 @@ robofuse
 # macOS
 .DS_Store
 
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+
 # Documentation (not needed in image)
 *.md
 
 # Separate repos (not part of robofuse docker image)
 ptt-go/
+inspiration/

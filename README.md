@@ -9,12 +9,12 @@
   <a href="https://github.com/itsrenoria/robofuse"><img src="https://img.shields.io/badge/docker-ready-blue?style=flat-square" alt="Docker"></a>
 </p>
 
-# robofuse v1.0
+# robofuse v1.1
 > **A high-performance Real-Debrid STRM file generator for your media server.**
 
 **robofuse** is a lightweight, blazing-fast service that interacts with the [Real-Debrid](https://real-debrid.com/) API to automatically organize your movie and TV library. It generates `.strm` files for use with media players like **Infuse**, **Jellyfin**, **Emby**, and **Plex**.
 
-Rewritten from the ground up in **Go**, robofuse v1.0 is designed for speed, efficiency, and stability.
+Rewritten from the ground up in **Go**, robofuse v1.1 is designed for speed, efficiency, and stability.
 
 ---
 
@@ -27,7 +27,7 @@ Rewritten from the ground up in **Go**, robofuse v1.0 is designed for speed, eff
 - ⏱️ **Watch Mode**: Set it and forget it. Runs continuously in the background to keep your library fresh.
 - 🛡️ **Rate Limit Protection**: Smartly respects separate rate limits for different API endpoints.
 - 🎯 **Deduplication**: Automatically handles duplicate downloads, keeping only the latest version.
-- 📝 **Metadata Parsing**: Integrated PTT logic for cleaner, better-organized file names.
+- 📝 **Metadata Parsing**: Integrated ptt-go parsing for cleaner, better-organized file names.
 
 ---
 
@@ -145,7 +145,7 @@ robofuse is a passion project developed and maintained for free. If you find it 
 
 This project wouldn't be possible without the foundational work of the open-source community.
 
-- **[PTT-Go](https://github.com/itsrenoria/PTT-Go)**: Our Go port of the excellent [dreulavelle/PTT](https://github.com/dreulavelle/PTT) filename parsing library.
+- **[ptt-go](https://github.com/itsrenoria/ptt-go)**: Our Go port of the excellent [dreulavelle/PTT](https://github.com/dreulavelle/PTT) filename parsing library.
 - **[Decypharr](https://github.com/sirrobot01/decypharr)**: Portions of this codebase were inspired by or repurposed from Decypharr (Copyright (c) 2025 Mukhtar Akere), used under the MIT License.
 
 ---

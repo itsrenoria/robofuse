@@ -518,7 +518,7 @@ type OrganizerResult struct {
 	Errors    int `json:"errors"`
 }
 
-// runOrganizer executes the Go organizer to organize files using PTT-Go.
+// runOrganizer executes the Go organizer to organize files using ptt-go.
 func (s *Service) runOrganizer() OrganizerResult {
 	s.logger.Debug().Msg("Running library organizer...")
 

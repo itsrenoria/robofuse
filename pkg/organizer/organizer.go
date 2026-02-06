@@ -1,5 +1,5 @@
 // Package organizer provides media file organization functionality.
-// It parses torrent filenames using PTT-Go and organizes them into
+// It parses torrent filenames using ptt-go and organizes them into
 // Movies/Series/Anime folder structures.
 package organizer
 

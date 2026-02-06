@@ -2,6 +2,8 @@
 cache/
 Library/
 Organized/
+library/
+library-organized/
 logs/
 *.log
 
@@ -11,6 +13,16 @@ logs/
 # macOS
 .DS_Store
 
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+
+# Env files
+.env
+
 # IDE
 .idea/
 .vscode/
@@ -18,3 +30,4 @@ logs/
 
 # Separate repos
 ptt-go/
+inspiration/
