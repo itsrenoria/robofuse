@@ -9,12 +9,12 @@
   <a href="https://github.com/itsrenoria/robofuse"><img src="https://img.shields.io/badge/docker-ready-blue?style=flat-square" alt="Docker"></a>
 </p>
 
-# robofuse v1.1
+# robofuse v1.1.1
 > **A high-performance Real-Debrid STRM file generator for your media server.**
 
 **robofuse** is a lightweight, blazing-fast service that interacts with the [Real-Debrid](https://real-debrid.com/) API to automatically organize your movie and TV library. It generates `.strm` files for use with media players like **Infuse**, **Jellyfin**, **Emby**, and **Plex**.
 
-Rewritten from the ground up in **Go**, robofuse v1.1 is designed for speed, efficiency, and stability.
+Rewritten from the ground up in **Go**, robofuse v1.1.1 is designed for speed, efficiency, and stability.
 
 ---
 
@@ -36,11 +36,10 @@ Rewritten from the ground up in **Go**, robofuse v1.1 is designed for speed, eff
 ### Prerequisites
 
 - **Real-Debrid Account**: You need an API token from your [Real-Debrid Account Panel](https://real-debrid.com/apitoken).
-- **Runtime**: One of:
-  - Docker (recommended)
-  - Downloaded binary from GitHub Releases
-  - Go `1.21+` for running via `go run`
+- **Install method**: Choose [Docker (recommended)](#install-docker), [Binary](#install-binary), or [Go Run](#install-go-run).
+- **Go version**: `1.21+` is required only for [Go Run](#install-go-run).
 
+<a id="install-docker"></a>
 ### 1) Docker (Recommended)
 
 1. Clone the repository:
@@ -49,9 +48,8 @@ Rewritten from the ground up in **Go**, robofuse v1.1 is designed for speed, eff
    cd robofuse
    ```
 
-2. Configure your API token:
+2. Edit `config.json` based on [Configuration](#configuration):
    ```bash
-   # Edit config.json and replace YOUR_REAL_DEBRID_API_TOKEN with your actual token
    nano config.json
    ```
 
@@ -65,44 +63,26 @@ Rewritten from the ground up in **Go**, robofuse v1.1 is designed for speed, eff
    docker compose logs -f
    ```
 
-### 2) Binary (GitHub Releases)
+<a id="install-binary"></a>
+### 2) Binary
 
 1. Open the [Releases page](https://github.com/itsrenoria/robofuse/releases) and download the asset for your platform.
-   - macOS/Linux assets are `.tar.gz`
-   - Windows assets are `.zip`
 2. Extract the archive.
-3. If you're on macOS, remove quarantine from the downloaded binary:
-   ```bash
-   xattr -d com.apple.quarantine ./robofuse 2>/dev/null || true
-   ```
-4. Create a local `config.json` from the repository template:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/itsrenoria/robofuse/main/config.json -o ./config.json
-   ```
-5. Edit `config.json` and replace `YOUR_REAL_DEBRID_API_TOKEN` with your token.
-6. Run directly from the extracted folder:
+3. Edit the included `config.json` based on [Configuration](#configuration).
+4. Run directly from the extracted folder:
    ```bash
    ./robofuse -c ./config.json run
    ```
-7. Optional: install it globally so you can run `robofuse` from anywhere:
-   ```bash
-   mkdir -p ~/.local/bin
-   install -m 755 ./robofuse ~/.local/bin/robofuse
-   ```
-8. If `~/.local/bin` is not in your `PATH`, add it (zsh):
-   ```bash
-   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-   source ~/.zshrc
-   ```
 
-### 3) Run With Go (`go run`)
+<a id="install-go-run"></a>
+### 3) Go Run
 
 1. Clone the repository:
    ```bash
    git clone https://github.com/itsrenoria/robofuse.git
    cd robofuse
    ```
-2. Configure your API token in `config.json`.
+2. Edit `config.json` based on [Configuration](#configuration).
 3. Run directly:
    ```bash
    go run ./cmd/robofuse -c ./config.json run
@@ -110,6 +90,7 @@ Rewritten from the ground up in **Go**, robofuse v1.1 is designed for speed, eff
 
 ---
 
+<a id="configuration"></a>
 ## ⚙️ Configuration
 
 Edit `config.json` to customize robofuse:
@@ -122,8 +103,8 @@ Edit `config.json` to customize robofuse:
 | `output_dir` | string | `./library` | Where raw STRM files will be generated. |
 | `organized_dir` | string | `./library-organized` | Where renamed/organized STRM files will be placed if `ptt_rename` is set to `true`. |
 | `cache_dir` | string | `./cache` | Directory for storing state/cache. |
-| `concurrent_requests`* | int | `50` | Max concurrent worker threads for processing. |
-| `general_rate_limit`* | int | `250` | Request limit per minute for general API calls. |
+| `concurrent_requests` | int | `50` | Max concurrent worker threads for processing. |
+| `general_rate_limit` | int | `250` | Request limit per minute for general API calls. |
 | `torrents_rate_limit` | int | `25` | Request limit per minute for download endpoints. |
 | `watch_mode` | bool | `false` | If set to `false`, robofuse will only run a single sync cycle. If set to `true`, robofuse will run in watch mode, which will run continuously in the background syncing every `watch_mode_interval` seconds. |
 | `watch_mode_interval` | int | `60` | Seconds to wait between sync cycles in watch mode. |
@@ -133,7 +114,8 @@ Edit `config.json` to customize robofuse:
 | `log_level` | string | `"info"` | Logging verbosity (`debug`, `info`, `warn`, `error`). |
 | `file_expiry_days` | int | `6` | Days to consider a file as expired from downloads in real-debrid. |
 
-\* These rate limits are conservative defaults that work well for large libraries. You can push higher (e.g. `600`+ for general, `100`+ concurrent) but YMMV depending on your library size and Real-Debrid's current load.
+> [!TIP]
+> The default rate limits are conservative and tuned for stability. You can raise them (for example `600+` general and `100+` concurrent), but results vary by library size and current Real-Debrid load.
 
 > [!IMPORTANT]
 > Don't delete `library`, `library-organized`, or `cache` by hand. These folders are part of the state/tracking system. If you need to reset, stop the service, back up what you need, then clear them intentionally.
@@ -142,7 +124,7 @@ Edit `config.json` to customize robofuse:
 
 ## 🎮 Usage
 
-### Docker Compose
+### Docker
 
 The included `docker-compose.yml` builds and runs robofuse:
 
@@ -159,8 +141,6 @@ services:
       - ./cache:/app/cache
 ```
 
-### Common Operations
-
 ```bash
 # Start in background
 docker compose up -d --build
@@ -175,7 +155,7 @@ docker compose down
 docker compose up -d --build
 ```
 
-### Binary Operations
+### Binary
 
 ```bash
 # One sync run
@@ -188,7 +168,7 @@ docker compose up -d --build
 ./robofuse -c ./config.json dry-run
 ```
 
-### Go Run Operations
+### Go Run
 
 ```bash
 # One sync run
@@ -200,6 +180,26 @@ go run ./cmd/robofuse -c ./config.json watch
 # Preview changes only
 go run ./cmd/robofuse -c ./config.json dry-run
 ```
+
+---
+
+## 🧩 Platform Notes
+
+> [!NOTE]
+> On macOS, downloaded binaries might be quarantined. If robofuse does not start, run:
+> ```bash
+> xattr -d com.apple.quarantine ./robofuse 2>/dev/null || true
+> ```
+
+> [!TIP]
+> Optional global install on macOS/Linux (zsh):
+> ```bash
+> mkdir -p ~/.local/bin
+> install -m 755 ./robofuse ~/.local/bin/robofuse
+> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+> source ~/.zshrc
+> ```
+> On Windows, add the directory containing `robofuse.exe` to your `PATH`.
 
 ---
 

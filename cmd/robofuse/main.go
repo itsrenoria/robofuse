@@ -11,7 +11,7 @@ import (
 	"github.com/robofuse/robofuse/pkg/sync"
 )
 
-var version = "1.1"
+var version = "1.1.1"
 
 func main() {
 	// Define flags

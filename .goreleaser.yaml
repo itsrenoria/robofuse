@@ -26,6 +26,8 @@ archives:
     ids:
       - robofuse
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - config.json
     format_overrides:
       - goos: windows
         formats: [zip]
