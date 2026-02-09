@@ -36,9 +36,12 @@ Rewritten from the ground up in **Go**, robofuse v1.1 is designed for speed, eff
 ### Prerequisites
 
 - **Real-Debrid Account**: You need an API token from your [Real-Debrid Account Panel](https://real-debrid.com/apitoken).
-- **Docker**: Required for running robofuse.
+- **Runtime**: One of:
+  - Docker (recommended)
+  - Downloaded binary from GitHub Releases
+  - Go `1.21+` for running via `go run`
 
-### Quick Start
+### 1) Docker (Recommended)
 
 1. Clone the repository:
    ```bash
@@ -60,6 +63,29 @@ Rewritten from the ground up in **Go**, robofuse v1.1 is designed for speed, eff
 4. View logs:
    ```bash
    docker compose logs -f
+   ```
+
+### 2) Binary (GitHub Releases)
+
+1. Open the [Releases page](https://github.com/itsrenoria/robofuse/releases) and download the archive for your platform.
+2. Extract the archive.
+3. Place `robofuse` (or `robofuse.exe`) somewhere in your `PATH`.
+4. Use a config file and run:
+   ```bash
+   robofuse -c /path/to/config.json run
+   ```
+
+### 3) Run With Go (`go run`)
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/itsrenoria/robofuse.git
+   cd robofuse
+   ```
+2. Configure your API token in `config.json`.
+3. Run directly:
+   ```bash
+   go run ./cmd/robofuse -c ./config.json run
    ```
 
 ---
@@ -127,6 +153,32 @@ docker compose down
 
 # Rebuild after code changes
 docker compose up -d --build
+```
+
+### Binary Operations
+
+```bash
+# One sync run
+robofuse -c /path/to/config.json run
+
+# Continuous watch mode
+robofuse -c /path/to/config.json watch
+
+# Preview changes only
+robofuse -c /path/to/config.json dry-run
+```
+
+### Go Run Operations
+
+```bash
+# One sync run
+go run ./cmd/robofuse -c ./config.json run
+
+# Continuous watch mode
+go run ./cmd/robofuse -c ./config.json watch
+
+# Preview changes only
+go run ./cmd/robofuse -c ./config.json dry-run
 ```
 
 ---

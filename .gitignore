@@ -9,6 +9,7 @@ logs/
 
 # Binary
 /robofuse
+dist/
 
 # macOS
 .DS_Store
