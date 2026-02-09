@@ -71,7 +71,7 @@ Rewritten from the ground up in **Go**, robofuse v1.1.1 is designed for speed, e
 3. Edit the included `config.json` based on [Configuration](#configuration).
 4. Run directly from the extracted folder:
    ```bash
-   ./robofuse -c ./config.json run
+   ./robofuse run
    ```
 
 <a id="install-go-run"></a>
@@ -85,8 +85,35 @@ Rewritten from the ground up in **Go**, robofuse v1.1.1 is designed for speed, e
 2. Edit `config.json` based on [Configuration](#configuration).
 3. Run directly:
    ```bash
-   go run ./cmd/robofuse -c ./config.json run
+   go run ./cmd/robofuse run
    ```
+
+### Platform Notes
+
+> [!NOTE]
+> Optional explicit config path: use `-c` (or `--config`) if your config file is not in the current directory.
+> ```bash
+> ./robofuse -c /absolute/path/to/config.json run
+> go run ./cmd/robofuse -c /absolute/path/to/config.json run
+> ```
+
+> [!NOTE]
+> macOS: if the downloaded binary is quarantined and won't start:
+> ```bash
+> xattr -d com.apple.quarantine ./robofuse 2>/dev/null || true
+> ```
+
+> [!TIP]
+> Linux/macOS optional global install (zsh example):
+> ```bash
+> mkdir -p ~/.local/bin
+> install -m 755 ./robofuse ~/.local/bin/robofuse
+> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+> source ~/.zshrc
+> ```
+
+> [!TIP]
+> Windows: run with `.\robofuse.exe run` and optionally add the folder containing `robofuse.exe` to your `PATH`.
 
 ---
 
@@ -159,47 +186,27 @@ docker compose up -d --build
 
 ```bash
 # One sync run
-./robofuse -c ./config.json run
+./robofuse run
 
 # Continuous watch mode
-./robofuse -c ./config.json watch
+./robofuse watch
 
 # Preview changes only
-./robofuse -c ./config.json dry-run
+./robofuse dry-run
 ```
 
 ### Go Run
 
 ```bash
 # One sync run
-go run ./cmd/robofuse -c ./config.json run
+go run ./cmd/robofuse run
 
 # Continuous watch mode
-go run ./cmd/robofuse -c ./config.json watch
+go run ./cmd/robofuse watch
 
 # Preview changes only
-go run ./cmd/robofuse -c ./config.json dry-run
+go run ./cmd/robofuse dry-run
 ```
-
----
-
-## 🧩 Platform Notes
-
-> [!NOTE]
-> On macOS, downloaded binaries might be quarantined. If robofuse does not start, run:
-> ```bash
-> xattr -d com.apple.quarantine ./robofuse 2>/dev/null || true
-> ```
-
-> [!TIP]
-> Optional global install on macOS/Linux (zsh):
-> ```bash
-> mkdir -p ~/.local/bin
-> install -m 755 ./robofuse ~/.local/bin/robofuse
-> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-> source ~/.zshrc
-> ```
-> On Windows, add the directory containing `robofuse.exe` to your `PATH`.
 
 ---
 
