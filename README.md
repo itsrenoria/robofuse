@@ -67,12 +67,32 @@ Rewritten from the ground up in **Go**, robofuse v1.1 is designed for speed, eff
 
 ### 2) Binary (GitHub Releases)
 
-1. Open the [Releases page](https://github.com/itsrenoria/robofuse/releases) and download the archive for your platform.
+1. Open the [Releases page](https://github.com/itsrenoria/robofuse/releases) and download the asset for your platform.
+   - macOS/Linux assets are `.tar.gz`
+   - Windows assets are `.zip`
 2. Extract the archive.
-3. Place `robofuse` (or `robofuse.exe`) somewhere in your `PATH`.
-4. Use a config file and run:
+3. If you're on macOS, remove quarantine from the downloaded binary:
    ```bash
-   robofuse -c /path/to/config.json run
+   xattr -d com.apple.quarantine ./robofuse 2>/dev/null || true
+   ```
+4. Create a local `config.json` from the repository template:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/itsrenoria/robofuse/main/config.json -o ./config.json
+   ```
+5. Edit `config.json` and replace `YOUR_REAL_DEBRID_API_TOKEN` with your token.
+6. Run directly from the extracted folder:
+   ```bash
+   ./robofuse -c ./config.json run
+   ```
+7. Optional: install it globally so you can run `robofuse` from anywhere:
+   ```bash
+   mkdir -p ~/.local/bin
+   install -m 755 ./robofuse ~/.local/bin/robofuse
+   ```
+8. If `~/.local/bin` is not in your `PATH`, add it (zsh):
+   ```bash
+   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+   source ~/.zshrc
    ```
 
 ### 3) Run With Go (`go run`)
@@ -159,13 +179,13 @@ docker compose up -d --build
 
 ```bash
 # One sync run
-robofuse -c /path/to/config.json run
+./robofuse -c ./config.json run
 
 # Continuous watch mode
-robofuse -c /path/to/config.json watch
+./robofuse -c ./config.json watch
 
 # Preview changes only
-robofuse -c /path/to/config.json dry-run
+./robofuse -c ./config.json dry-run
 ```
 
 ### Go Run Operations
