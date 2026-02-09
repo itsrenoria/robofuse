@@ -18,6 +18,8 @@ jobs:
   create_tag:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.prep.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -65,13 +67,36 @@ jobs:
           git tag "$tag"
           git push origin "$tag"
 
-      - name: Release handoff
-        shell: bash
-        run: |
-          echo "Created ${{ steps.prep.outputs.tag }}."
-          echo "Tag push will trigger a new run of this workflow to publish binaries."
+  release_from_dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    needs: create_tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.create_tag.outputs.tag }}
+          fetch-depth: 0
 
-  release:
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release_from_tag_push:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
