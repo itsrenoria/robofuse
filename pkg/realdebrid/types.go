@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+// types.go contains Real-Debrid API models and custom unmarshal helpers.
+
 // Torrent represents a torrent in Real-Debrid
 type Torrent struct {
 	ID       string    `json:"id"`

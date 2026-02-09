@@ -4,6 +4,8 @@ import (
 	"sync"
 )
 
+// pool.go provides a bounded worker pool abstraction.
+
 // Pool manages a pool of concurrent workers
 type Pool struct {
 	maxWorkers int

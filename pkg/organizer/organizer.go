@@ -16,6 +16,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// organizer.go handles parsing and output path construction for media items.
+
 // Result contains statistics from the organization process.
 type Result struct {
 	Processed int `json:"processed"`

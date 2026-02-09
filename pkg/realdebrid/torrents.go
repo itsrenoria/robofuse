@@ -12,6 +12,8 @@ import (
 	"github.com/robofuse/robofuse/internal/request"
 )
 
+// torrents.go fetches torrents and dead/healthy classification details.
+
 // GetTorrents fetches all torrents with pagination (limit=100 to ensure links are returned)
 // Returns: downloaded torrents, dead torrents, error
 func (c *Client) GetTorrents() ([]*Torrent, []*Torrent, error) {

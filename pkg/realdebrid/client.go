@@ -11,6 +11,8 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// client.go configures API clients and endpoint-specific rate limits.
+
 // Client is the Real-Debrid API client
 type Client struct {
 	Host   string

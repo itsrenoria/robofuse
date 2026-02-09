@@ -8,6 +8,8 @@ import (
 	"github.com/robofuse/robofuse/pkg/realdebrid"
 )
 
+// retry_handler.go processes queued retry items across sync cycles.
+
 // RetryStats contains statistics from retry queue processing
 type RetryStats struct {
 	Succeeded int

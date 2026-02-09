@@ -8,6 +8,8 @@ import (
 	"github.com/robofuse/robofuse/pkg/tracking"
 )
 
+// expiry.go handles STRM update and expiry-related tracking helpers.
+
 // GetExpiredFiles returns tracking data for files older than the specified duration
 func (s *Service) GetExpiredFiles(olderThan time.Duration) []*tracking.FileTracking {
 	return s.tracking.GetExpired(olderThan)

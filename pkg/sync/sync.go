@@ -19,6 +19,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// sync.go orchestrates full sync cycles, watch mode, and summary reporting.
+
 // Service orchestrates the entire sync process
 type Service struct {
 	rd            *realdebrid.Client

@@ -9,6 +9,7 @@ logs/
 
 # Go binary
 robofuse
+dist/
 
 # Git
 .git/

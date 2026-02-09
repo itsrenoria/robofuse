@@ -7,6 +7,8 @@ import (
 	"net/http"
 )
 
+// downloads.go fetches and normalizes Real-Debrid downloads.
+
 // GetDownloads fetches all downloads with pagination
 // Filters for streamable=1 and deduplicates by link (keeps latest generated)
 func (c *Client) GetDownloads() ([]*Download, error) {

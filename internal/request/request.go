@@ -23,6 +23,8 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// request.go provides the shared HTTP client, retries, and rate limiting.
+
 // JoinURL joins a base URL with path components
 func JoinURL(base string, paths ...string) (string, error) {
 	lastPath := paths[len(paths)-1]

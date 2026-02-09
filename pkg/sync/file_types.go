@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+// file_types.go defines extension filters used by sync categorization.
+
 // Video extensions
 var videoExtensions = map[string]bool{
 	".mkv":  true,

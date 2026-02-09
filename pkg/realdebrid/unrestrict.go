@@ -12,6 +12,8 @@ import (
 	"github.com/robofuse/robofuse/internal/request"
 )
 
+// unrestrict.go handles link unrestriction and retry behavior.
+
 // UnrestrictLink unrestricts a Real-Debrid link with dual retry strategy
 // - 503 errors: 2 immediate retries with 10s delay, then queue for next cycle
 // - 429 errors: 3 immediate retries with exponential backoff (2s, 4s, 8s)

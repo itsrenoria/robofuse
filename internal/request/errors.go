@@ -1,5 +1,7 @@
 package request
 
+// errors.go defines typed HTTP errors returned by request operations.
+
 // HTTPError represents an HTTP error with status code and message
 type HTTPError struct {
 	StatusCode int

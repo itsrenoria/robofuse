@@ -9,6 +9,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// repair.go re-adds dead torrents using cached magnet data when possible.
+
 // Service handles torrent repair operations
 type Service struct {
 	rd     *realdebrid.Client
