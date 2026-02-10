@@ -10,6 +10,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// retry.go persists and manages link retries across sync cycles.
+
 // RetryItem represents a link that failed and needs retry
 type RetryItem struct {
 	Link       string    `json:"link"`

@@ -10,6 +10,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// tracking.go stores STRM lifecycle metadata for change detection and cleanup.
+
 // FileTracking represents tracking data for a single STRM file
 type FileTracking struct {
 	RelativePath string    `json:"relative_path"`

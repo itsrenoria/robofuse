@@ -8,6 +8,8 @@ import (
 	"sync"
 )
 
+// config.go loads, validates, and exposes application configuration.
+
 var (
 	once     sync.Once
 	instance *Config

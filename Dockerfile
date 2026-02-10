@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
@@ -12,7 +14,7 @@ COPY . .
 # Build
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o robofuse ./cmd/robofuse
 
-# Final stage - pure Alpine (no Python needed!)
+# Final stage - minimal runtime image
 FROM alpine:3.19
 
 # Install minimal dependencies

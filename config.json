@@ -1,5 +1,5 @@
 {
-  "token": "YOUR_REAL_DEBRID_API_TOKEN",
+  "token": "YOUR_RD_API_TOKEN",
   "output_dir": "./library",
   "organized_dir": "./library-organized",
   "cache_dir": "./cache",

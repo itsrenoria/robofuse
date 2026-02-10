@@ -9,6 +9,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// organizer_test.go verifies organizer cleanup and DB tracking behavior.
+
 func TestRun_RemovesOrganizedWhenSourceMissing(t *testing.T) {
 	baseDir := t.TempDir()
 

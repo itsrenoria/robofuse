@@ -14,6 +14,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// strm.go creates and reconciles STRM files from RD download candidates.
+
 // Service handles STRM file generation
 type Service struct {
 	config   *config.Config

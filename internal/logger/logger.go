@@ -12,6 +12,8 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
+// logger.go centralizes structured logger setup and log file rotation.
+
 var (
 	once      sync.Once
 	logPath   string

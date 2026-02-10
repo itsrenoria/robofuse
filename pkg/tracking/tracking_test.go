@@ -7,6 +7,8 @@ import (
 	"github.com/robofuse/robofuse/internal/logger"
 )
 
+// tracking_test.go guards expiry behavior across CreatedAt/LastChecked values.
+
 func TestGetExpired_UsesLastCheckedFallbackCreatedAt(t *testing.T) {
 	now := time.Now()
 	olderThan := 6 * 24 * time.Hour

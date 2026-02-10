@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+// summary.go formats compact run summaries for logs and terminals.
+
 // SummaryOptions controls summary formatting.
 type SummaryOptions struct {
 	Status     string

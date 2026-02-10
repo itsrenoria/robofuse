@@ -8,6 +8,8 @@ import (
 	"sync"
 )
 
+// progress.go renders terminal progress bars for long-running operations.
+
 // ProgressBar renders a simple single-line progress bar to stdout.
 type ProgressBar struct {
 	label string
