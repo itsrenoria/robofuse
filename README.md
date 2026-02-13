@@ -9,12 +9,12 @@
   <a href="https://github.com/itsrenoria/robofuse"><img src="https://img.shields.io/badge/docker-ready-blue?style=flat-square" alt="Docker"></a>
 </p>
 
-# robofuse v1.1.1
+# robofuse
 > **A high-performance Real-Debrid STRM file generator for your media server.**
 
 **robofuse** is a lightweight, blazing-fast service that interacts with the [Real-Debrid](https://real-debrid.com/) API to automatically organize your movie and TV library. It generates `.strm` files for use with media players like **Infuse**, **Jellyfin**, **Emby**, and ~~**Plex**~~ ([no longer supports `.strm` files](https://www.reddit.com/r/PleX/comments/8gtiv6/strm_file_support/)).
 
-Rewritten from the ground up in **Go**, robofuse v1.1.1 is designed for speed, efficiency, and stability.
+Rewritten from the ground up in **Go**, robofuse is designed for speed, efficiency, and stability.
 
 ---
 
