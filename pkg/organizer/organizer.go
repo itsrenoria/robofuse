@@ -79,8 +79,6 @@ func New(cfg Config) *Organizer {
 	organizedDir := cfg.OrganizedDir
 	if organizedDir == "" {
 		organizedDir = filepath.Join(cfg.BaseDir, "library-organized")
-	} else if !filepath.IsAbs(organizedDir) {
-		organizedDir = filepath.Join(cfg.BaseDir, strings.TrimPrefix(organizedDir, "./"))
 	}
 
 	cacheDir := cfg.CacheDir
