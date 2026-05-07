@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/robofuse/robofuse/internal/config"
 	"github.com/robofuse/robofuse/internal/health"
@@ -34,6 +38,7 @@ with media players like Infuse, Jellyfin, and Emby.`,
 			if logLevel != "" {
 				logger.SetLogLevel(logLevel)
 			}
+			// Start HTTP server for health checks and metrics
 			go func() {
 				mux := http.NewServeMux()
 				mux.Handle("/healthz", health.Handler())
@@ -115,6 +120,8 @@ func printBanner() {
 func runSync(cfg *config.Config, dryRun bool) {
 	log := logger.Default()
 	service := sync.New(cfg)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	if rebuildOrganized && !dryRun {
 		fmt.Println("Rebuilding organized library from scratch...")
@@ -150,11 +157,22 @@ func runSync(cfg *config.Config, dryRun bool) {
 		safeRemoveAll(cfg.TrackingFile)
 	}
 
-	result, err := service.Run(dryRun)
+	result, err := service.Run(ctx, dryRun)
 	if err != nil {
-		log.Error().Err(err).Msg("Sync failed")
-		os.Exit(1)
+		if errors.Is(err, context.Canceled) {
+			fmt.Println("\nShutdown signal received — gracefully stopping...")
+		} else {
+			log.Error().Err(err).Msg("Sync failed")
+		}
+		service.WaitForProbes()
+		log.Info().Msg("Shutdown complete")
+		if !errors.Is(err, context.Canceled) {
+			os.Exit(1)
+		}
+		return
 	}
+	service.WaitForProbes()
+	log.Info().Msg("Shutdown complete")
 
 	summary := sync.FormatSummary(result, sync.SummaryOptions{
 		DryRun:     dryRun,
@@ -165,11 +183,15 @@ func runSync(cfg *config.Config, dryRun bool) {
 
 func runWatch(cfg *config.Config) {
 	log := logger.Default()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
 	service := sync.New(cfg)
-	if err := service.Watch(); err != nil {
+	if err := service.Watch(ctx); err != nil {
 		log.Error().Err(err).Msg("Watch mode failed")
+		service.WaitForProbes()
 		os.Exit(1)
 	}
+	service.WaitForProbes()
 	log.Info().Msg("Watch mode shut down gracefully")
 }

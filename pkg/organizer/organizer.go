@@ -4,159 +4,75 @@
 package organizer
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	ptt "github.com/itsrenoria/ptt-go"
-	"github.com/rs/zerolog"
 )
+
+var parserPool = sync.Pool{
+	New: func() interface{} {
+		p := ptt.NewParser()
+		ptt.AddDefaults(p)
+		return p
+	},
+}
+
+var animeKeywords = []string{
+	"subsplease", "erai-raws", "judas", "ember", "asw",
+	"dkb", "nep_blanc", "lostyears", "akihitosubs",
+	"dual audio", "dual-audio",
+}
 
 // organizer.go handles parsing and output path construction for media items.
 
-// Result contains statistics from the organization process.
-type Result struct {
-	Processed int `json:"processed"`
-	New       int `json:"new"`
-	Deleted   int `json:"deleted"`
-	Updated   int `json:"updated"`
-	Skipped   int `json:"skipped"`
-	Errors    int `json:"errors"`
-}
+// ContentPathOptions holds all inputs needed to calculate an organized destination path.
+type ContentPathOptions struct {
+	// File identity
+	Filename      string // e.g. "He.Man.S01E01.1080p.avi.strm"
+	TorrentFolder string // e.g. "He.Man.S01.1080p"
+	RDID          string // extracted RD link ID
 
-// FileEntry represents a tracked file in the organizer database.
-type FileEntry struct {
-	DestPath    string `json:"dest_path"`
-	RDID        string `json:"rd_id"`
-	Type        string `json:"type"`
-	DownloadURL string `json:"download_url,omitempty"`
-	UpdatedAt   string `json:"updated_at,omitempty"`
-}
+	// TMDB enrichment (may be empty if not matched)
+	TMDBTitle         string
+	TMDBYear          int
+	TMDBType          string // "movie" or "show"
+	TMDBContentRating string
 
-// TrackingEntry represents an entry from the file tracking system.
-type TrackingEntry struct {
-	Link        string `json:"link"`
-	DownloadURL string `json:"download_url,omitempty"`
-	LastChecked string `json:"last_checked,omitempty"`
-}
+	// Routing rules
+	AdultPatterns []string
+	FolderRules   []FolderRule
+	KidsMaxRating string
+	KidsFolder    string
+	AnimeFolder   string
+	MovieFolder   string
+	SeriesFolder  string
 
-// Organizer handles media file organization.
-type Organizer struct {
-	baseDir      string
-	libraryDir   string
-	organizedDir string
-	dbPath       string
-	trackingPath string
-	parser       *ptt.Parser
-	logger       zerolog.Logger
-	db           map[string]FileEntry
-}
+	// Pre-determined classification
+	Category    string // pre-determined category from categorizeTorrent
+	TMDBIsAnime bool   // true if TMDB identified this as anime
 
-// Config holds organizer configuration.
-type Config struct {
-	BaseDir      string
+	// Existing folders lookup
 	OrganizedDir string
-	OutputDir    string
-	TrackingFile string
-	CacheDir     string
-	Logger       zerolog.Logger
 }
 
-// New creates a new Organizer instance.
-func New(cfg Config) *Organizer {
-	parser := ptt.NewParser()
-	ptt.AddDefaults(parser)
-
-	libraryDir := cfg.OutputDir
-	if libraryDir == "" {
-		libraryDir = filepath.Join(cfg.BaseDir, "library")
-	}
-
-	organizedDir := cfg.OrganizedDir
-	if organizedDir == "" {
-		organizedDir = filepath.Join(cfg.BaseDir, "library-organized")
-	}
-
-	cacheDir := cfg.CacheDir
-	if cacheDir == "" {
-		cacheDir = filepath.Join(cfg.BaseDir, "cache")
-	}
-
-	trackingPath := cfg.TrackingFile
-	if trackingPath == "" {
-		trackingPath = filepath.Join(cfg.BaseDir, "cache", "file_tracking.json")
-	}
-
-	return &Organizer{
-		baseDir:      cfg.BaseDir,
-		libraryDir:   libraryDir,
-		organizedDir: organizedDir,
-		dbPath:       filepath.Join(cacheDir, "organizer_db.json"),
-		trackingPath: trackingPath,
-		parser:       parser,
-		logger:       cfg.Logger,
-		db:           make(map[string]FileEntry),
-	}
+// FolderRule is a custom routing rule.
+type FolderRule struct {
+	Pattern  string
+	Target   string
+	SkipTMDB bool
 }
 
-// loadDB loads the organizer database from disk.
-func (o *Organizer) loadDB() error {
-	data, err := os.ReadFile(o.dbPath)
-	if os.IsNotExist(err) {
-		o.db = make(map[string]FileEntry)
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, &o.db)
-}
-
-// saveDB saves the organizer database to disk.
-func (o *Organizer) saveDB() error {
-	if err := os.MkdirAll(filepath.Dir(o.dbPath), 0755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(o.db, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(o.dbPath, data, 0644)
-}
-
-// loadTracking loads the file tracking database.
-func (o *Organizer) loadTracking() (map[string]TrackingEntry, error) {
-	data, err := os.ReadFile(o.trackingPath)
-	if os.IsNotExist(err) {
-		return make(map[string]TrackingEntry), nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	var tracking map[string]TrackingEntry
-	if err := json.Unmarshal(data, &tracking); err != nil {
-		return nil, err
-	}
-	return tracking, nil
-}
-
-var rdIDRegex = regexp.MustCompile(`/d/([a-zA-Z0-9]+)`)
-
-// getRDIDFromLink extracts the Real-Debrid ID from a link.
-func getRDIDFromLink(link string) string {
-	if link == "" {
-		return ""
-	}
-	match := rdIDRegex.FindStringSubmatch(link)
-	if len(match) > 1 {
-		return match[1]
-	}
-	return ""
+// ExistingFolderOptions holds inputs for FindExistingSeriesFolder.
+type ExistingFolderOptions struct {
+	OrganizedDir string
+	BaseFolder   string
+	Title        string
+	Year         int
 }
 
 var illegalCharsRegex = regexp.MustCompile(`[<>:"/\\|?*]`)
@@ -166,18 +82,46 @@ func cleanFilename(name string) string {
 	return illegalCharsRegex.ReplaceAllString(name, "")
 }
 
-// findExistingSeriesFolder checks if a folder for the series already exists.
-func (o *Organizer) findExistingSeriesFolder(baseFolder, title string, year int) string {
-	searchDir := filepath.Join(o.organizedDir, baseFolder)
+func hasAnimeKeyword(names ...string) bool {
+	for _, name := range names {
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "anime") {
+			return true
+		}
+		for _, kw := range animeKeywords {
+			if strings.Contains(lower, kw) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// safeFolderName returns a sanitized single folder name component.
+// Strips path separators and parent directory traversal.
+func safeFolderName(name string) string {
+	name = strings.ReplaceAll(name, "/", "")
+	name = strings.ReplaceAll(name, `\`, "")
+	name = strings.ReplaceAll(name, "..", "")
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "Unknown"
+	}
+	return name
+}
+
+// FindExistingSeriesFolder looks for an existing series folder in the organized directory.
+func FindExistingSeriesFolder(opts ExistingFolderOptions) string {
+	searchDir := filepath.Join(opts.OrganizedDir, opts.BaseFolder)
 	entries, err := os.ReadDir(searchDir)
 	if err != nil {
 		return ""
 	}
 
-	normalizedTitle := strings.ToLower(strings.TrimSpace(title))
-	targetWithYear := title
-	if year > 0 {
-		targetWithYear = fmt.Sprintf("%s (%d)", title, year)
+	normalizedTitle := strings.ToLower(strings.TrimSpace(opts.Title))
+	targetWithYear := opts.Title
+	if opts.Year > 0 {
+		targetWithYear = fmt.Sprintf("%s (%d)", opts.Title, opts.Year)
 	}
 
 	// Check for exact matches first
@@ -207,8 +151,107 @@ func (o *Organizer) findExistingSeriesFolder(baseFolder, title string, year int)
 	return ""
 }
 
-// getContentTypeAndPath determines content type and destination path.
-func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo, filename, rdID string) (string, string) {
+// isAdultPath checks if a source path matches any adult pattern or folder rule.
+func isAdultPath(sourceRelPath string, adultPatterns []string, folderRules []FolderRule) bool {
+	// Check folder portion
+	folder := strings.ToLower(filepath.Dir(sourceRelPath))
+	for _, p := range adultPatterns {
+		if p != "" && strings.Contains(folder, strings.ToLower(p)) {
+			return true
+		}
+	}
+	for _, r := range folderRules {
+		if r.Pattern == "" {
+			continue
+		}
+		if strings.HasPrefix(r.Pattern, "~") {
+			re, err := regexp.Compile(r.Pattern[1:])
+			if err == nil && re.MatchString(filepath.Dir(sourceRelPath)) {
+				return true
+			}
+		} else if strings.Contains(folder, strings.ToLower(r.Pattern)) {
+			return true
+		}
+	}
+
+	// Check filename portion
+	filename := strings.ToLower(filepath.Base(sourceRelPath))
+	for _, p := range adultPatterns {
+		if p != "" && strings.Contains(filename, strings.ToLower(p)) {
+			return true
+		}
+	}
+	for _, r := range folderRules {
+		if r.Pattern == "" {
+			continue
+		}
+		if strings.HasPrefix(r.Pattern, "~") {
+			re, err := regexp.Compile(r.Pattern[1:])
+			if err == nil && re.MatchString(filepath.Base(sourceRelPath)) {
+				return true
+			}
+		} else if strings.Contains(filename, strings.ToLower(r.Pattern)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// buildAdultPath builds a destination path for adult content using folder rules.
+func buildAdultPath(sourceRelPath, filename, rdID string, folderRules []FolderRule) string {
+	folderName := filepath.Base(filepath.Dir(sourceRelPath))
+	cleanFolder := cleanFilename(folderName)
+
+	// Determine target folder from rules
+	target := "X"
+	folderLower := strings.ToLower(filepath.Dir(sourceRelPath))
+	for _, r := range folderRules {
+		if r.Pattern != "" && strings.Contains(folderLower, strings.ToLower(r.Pattern)) {
+			target = r.Target
+			break
+		}
+	}
+
+	ext := realSTRMExt(filename)
+	idSuffix := ""
+	if rdID != "" {
+		idSuffix = fmt.Sprintf(" [%s]", rdID)
+	}
+	baseName := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	cleanFile := cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
+
+	cleanTarget := safeFolderName(target)
+	return filepath.Join(cleanTarget, cleanFolder, cleanFile)
+}
+
+// CalculateContentPath determines content type and destination relative path
+// for a media file. Returns the content type (movie/series/anime/adult/kids)
+// and the relative destination path within the organized directory.
+//
+// This is a standalone version of getContentTypeAndPath that accepts explicit
+// options instead of relying on the Organizer struct.
+func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelPath string) {
+	fullRelPath := filepath.Join(opts.TorrentFolder, opts.Filename)
+
+	if isAdultPath(fullRelPath, opts.AdultPatterns, opts.FolderRules) {
+		return "adult", buildAdultPath(fullRelPath, opts.Filename, opts.RDID, opts.FolderRules)
+	}
+
+	nameNoExt := strings.TrimSuffix(opts.Filename, filepath.Ext(opts.Filename))
+	parser := parserPool.Get().(*ptt.Parser)
+	defer parserPool.Put(parser)
+	parsed := parser.Parse(nameNoExt)
+
+	parentFolderName := ""
+	if opts.TorrentFolder != "" && opts.TorrentFolder != "." {
+		parentFolderName = filepath.Base(opts.TorrentFolder)
+	}
+	var parentParsed *ptt.TorrentInfo
+	if parentFolderName != "" {
+		parentParsed = parser.Parse(parentFolderName)
+	}
+
 	// Extract info from filename
 	fTitle := parsed.Title
 	fYear := parsed.Year
@@ -229,7 +272,7 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 		pAnime = parentParsed.Anime
 	}
 
-	// Determine if series
+	// Determine if series (PTT provides base detection; category override refines type)
 	isSeriesFilename := len(fSeason) > 0 || len(fEpisode) > 0 || fAnime
 	isSeriesParent := len(pSeason) > 0 || len(pEpisode) > 0 || pAnime
 
@@ -238,11 +281,7 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 	var season, episode []int
 
 	if isSeriesParent {
-		if pAnime {
-			finalType = "anime"
-		} else {
-			finalType = "series"
-		}
+		finalType = "series"
 
 		if pTitle != "" {
 			title = pTitle
@@ -266,11 +305,7 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 			episode = fEpisode
 		}
 	} else if isSeriesFilename {
-		if fAnime {
-			finalType = "anime"
-		} else {
-			finalType = "series"
-		}
+		finalType = "series"
 		if fTitle != "" {
 			title = fTitle
 		} else {
@@ -295,19 +330,112 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 		}
 	}
 
+	// Category override: if upstream already determined the type, trust it over PTT
+	if opts.Category == "anime" {
+		finalType = "anime"
+	} else if opts.Category == "series" {
+		finalType = "series"
+	} else if opts.Category == "movie" {
+		finalType = "movie"
+	} else if opts.Category == "adult" {
+		finalType = "adult"
+	} else if opts.Category == "unmatched" {
+		finalType = "unmatched"
+	}
+
+	if finalType == "unmatched" {
+		baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+		ext := realSTRMExt(opts.Filename)
+		idSuffix := ""
+		if opts.RDID != "" {
+			idSuffix = fmt.Sprintf(" [%s]", opts.RDID)
+		}
+		cleanFile := cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
+		folder := cleanFilename(opts.TorrentFolder)
+		if folder == "" {
+			folder = "Unknown"
+		}
+		return "unmatched", filepath.Join("unmatched", folder, cleanFile)
+	}
+
+	// TMDB override: if we have an official match, use its title, year, and type
+	if opts.TMDBTitle != "" {
+		wasAnime := finalType == "anime"
+		title = opts.TMDBTitle
+		if opts.TMDBYear > 0 {
+			year = opts.TMDBYear
+		}
+		if opts.TMDBType == "show" {
+			if !wasAnime {
+				finalType = "series"
+			}
+		} else if opts.TMDBType == "movie" {
+			finalType = "movie"
+		}
+	}
+
+	// TMDB anime override: if TMDB says anime, route to anime folder
+	if opts.TMDBIsAnime && finalType == "series" {
+		finalType = "anime"
+	}
+
+	// Kids content routing: if rating qualifies, override to kids folder
+	if opts.KidsMaxRating != "" && opts.TMDBContentRating != "" {
+		if RatingIsKids(opts.TMDBContentRating, opts.KidsMaxRating) {
+			kidsFolder := opts.KidsFolder
+			if kidsFolder == "" {
+				kidsFolder = "Kids"
+			}
+			kidsFolder = safeFolderName(kidsFolder)
+			kidsType := "Movies"
+			if finalType == "series" {
+				kidsType = "Series"
+			} else if finalType == "anime" {
+				kidsType = "Anime"
+			}
+			baseFolder := filepath.Join(kidsFolder, kidsType)
+			// Build path under kids folder
+			cleanTitle := cleanFilename(title)
+			if year > 0 {
+				cleanTitle = cleanFilename(fmt.Sprintf("%s (%d)", title, year))
+			}
+			ext := realSTRMExt(opts.Filename)
+			idSuffix := ""
+			if opts.RDID != "" {
+				idSuffix = fmt.Sprintf(" [%s]", opts.RDID)
+			}
+			baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+			cleanFile := cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
+			return "kids", filepath.Join(baseFolder, cleanTitle, cleanFile)
+		}
+	}
+
 	// Determine base folder
 	var baseFolder string
-	switch finalType {
-	case "anime":
+	switch {
+	case finalType == "anime" && opts.AnimeFolder != "":
+		baseFolder = safeFolderName(opts.AnimeFolder)
+	case finalType == "anime":
 		baseFolder = "Anime"
-	case "series":
-		baseFolder = "Series"
+	case finalType == "series":
+		baseFolder = opts.SeriesFolder
+		if baseFolder == "" {
+			baseFolder = "Series"
+		}
 	default:
-		baseFolder = "Movies"
+		baseFolder = opts.MovieFolder
+		if baseFolder == "" {
+			baseFolder = "Movies"
+		}
 	}
 
 	// Check for existing folder
-	existingFolder := o.findExistingSeriesFolder(baseFolder, title, year)
+	existingFolder := FindExistingSeriesFolder(ExistingFolderOptions{
+		OrganizedDir: opts.OrganizedDir,
+		BaseFolder:   baseFolder,
+		Title:        title,
+		Year:         year,
+	})
 	var formattedTitle string
 	if existingFolder != "" {
 		formattedTitle = existingFolder
@@ -321,17 +449,17 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 
 	// ID suffix
 	idSuffix := ""
-	if rdID != "" {
-		idSuffix = fmt.Sprintf(" [%s]", rdID)
+	if opts.RDID != "" {
+		idSuffix = fmt.Sprintf(" [%s]", opts.RDID)
 	}
 
-	// Extension
-	ext := filepath.Ext(filename)
+	// Extension — preserve real extension inside .strm (e.g. .avi.strm → .avi.strm)
+	ext := realSTRMExt(opts.Filename)
 
-	var destPath string
 	if finalType == "movie" {
-		finalFilename := cleanFilename(fmt.Sprintf("%s%s%s", formattedTitle, idSuffix, ext))
-		destPath = filepath.Join("Movies", formattedTitle, finalFilename)
+		baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+		cleanFile := cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
+		destRelPath = filepath.Join(baseFolder, formattedTitle, cleanFile)
 	} else {
 		// Series or Anime
 		var seasonFolder string
@@ -341,172 +469,46 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 			seasonFolder = "Season Unknown"
 		}
 
-		var finalFilename string
+		var cleanFile string
 		if len(episode) > 0 {
-			var epStr string
-			if len(season) > 0 {
-				epStr = fmt.Sprintf("S%02dE%02d", season[0], episode[0])
-			} else {
-				epStr = fmt.Sprintf("E%02d", episode[0])
-			}
-			finalFilename = cleanFilename(fmt.Sprintf("%s %s%s%s", title, epStr, idSuffix, ext))
+			baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+			cleanFile = cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
 		} else {
-			partName := fTitle
-			if partName == "" {
-				partName = "Unknown"
-			}
-			if strings.EqualFold(partName, title) {
-				finalFilename = cleanFilename(fmt.Sprintf("%s%s%s", title, idSuffix, ext))
-			} else {
-				finalFilename = cleanFilename(fmt.Sprintf("%s - %s%s%s", title, partName, idSuffix, ext))
-			}
+			baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+			cleanFile = cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
 		}
 
-		destPath = filepath.Join(baseFolder, formattedTitle, seasonFolder, finalFilename)
+		destRelPath = filepath.Join(baseFolder, formattedTitle, seasonFolder, cleanFile)
 	}
 
-	return finalType, destPath
+	return finalType, destRelPath
 }
 
-// copyFile copies a file from src to dst.
-func copyFile(src, dst string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
+// realSTRMExt extracts the real media extension from a .strm filename.
+// Always returns .original.strm format.
+// "Bluey.avi.strm" → ".avi.strm", "Movie.mkv" → ".mkv.strm", "Movie.strm" → ".strm"
+func realSTRMExt(filename string) string {
+	if strings.HasSuffix(strings.ToLower(filename), ".strm") {
+		return filepath.Ext(strings.TrimSuffix(filename, ".strm")) + ".strm"
 	}
-	defer sourceFile.Close()
-
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-
-	destFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	_, err = io.Copy(destFile, sourceFile)
-	return err
+	return filepath.Ext(filename) + ".strm"
 }
 
-// Run executes the organization process.
-func (o *Organizer) Run() Result {
-	result := Result{}
-
-	if err := o.loadDB(); err != nil {
-		o.logger.Error().Err(err).Msg("Failed to load organizer database")
-		return result
+// RatingIsKids returns true if the content rating qualifies for kids routing.
+func RatingIsKids(rating, max string) bool {
+	idx := map[string]int{
+		"TV-Y": 1, "G": 1,
+		"TV-Y7": 2, "PG": 2,
+		"TV-G":  3,
+		"TV-PG": 4, "PG-13": 4,
+		"TV-14": 5,
+		"R":     6, "TV-MA": 6,
+		"NC-17": 7,
 	}
-
-	tracking, err := o.loadTracking()
-	if err != nil {
-		o.logger.Error().Err(err).Msg("Failed to load tracking database")
-		return result
+	ratingIdx, ratingKnown := idx[rating]
+	maxIdx, maxKnown := idx[max]
+	if !ratingKnown || !maxKnown {
+		return false
 	}
-
-	result.Processed = len(tracking)
-	currentSourcePaths := make(map[string]bool)
-	newState := make(map[string]FileEntry)
-
-	for relPath, meta := range tracking {
-		sourceFullPath := filepath.Join(o.libraryDir, relPath)
-		if !fileExists(sourceFullPath) {
-			continue
-		}
-		currentSourcePaths[relPath] = true
-
-		// Check if already organized and up to date
-		if prevEntry, exists := o.db[relPath]; exists {
-			currentID := getRDIDFromLink(meta.Link)
-			destFullPath := filepath.Join(o.organizedDir, prevEntry.DestPath)
-			sameURL := meta.DownloadURL != "" && prevEntry.DownloadURL == meta.DownloadURL
-			if prevEntry.RDID == currentID && fileExists(destFullPath) && (sameURL || meta.DownloadURL == "") {
-				newState[relPath] = prevEntry
-				result.Skipped++
-				continue
-			}
-		}
-
-		// Needs organization
-
-		// Parse filename
-		filename := filepath.Base(relPath)
-		nameNoExt := strings.TrimSuffix(filename, filepath.Ext(filename))
-		parsed := o.parser.Parse(nameNoExt)
-
-		// Parse parent folder
-		parentRelDir := filepath.Dir(relPath)
-		parentFolderName := ""
-		if parentRelDir != "" && parentRelDir != "." {
-			parentFolderName = filepath.Base(parentRelDir)
-		}
-
-		var parentParsed *ptt.TorrentInfo
-		if parentFolderName != "" {
-			parentParsed = o.parser.Parse(parentFolderName)
-		}
-
-		rdID := getRDIDFromLink(meta.Link)
-
-		// Determine destination
-		contentType, destRelPath := o.getContentTypeAndPath(parsed, parentParsed, filename, rdID)
-		destFullPath := filepath.Join(o.organizedDir, destRelPath)
-
-		// Copy file
-		if err := copyFile(sourceFullPath, destFullPath); err != nil {
-			o.logger.Error().Err(err).Str("path", relPath).Msg("Failed to organize file")
-			result.Errors++
-			continue
-		}
-
-		newState[relPath] = FileEntry{
-			DestPath:    destRelPath,
-			RDID:        rdID,
-			Type:        contentType,
-			DownloadURL: meta.DownloadURL,
-			UpdatedAt:   meta.LastChecked,
-		}
-		result.New++
-	}
-
-	// Cleanup deleted files
-	for oldSrcPath, oldEntry := range o.db {
-		if !currentSourcePaths[oldSrcPath] {
-			destFull := filepath.Join(o.organizedDir, oldEntry.DestPath)
-			if fileExists(destFull) {
-				if err := os.Remove(destFull); err == nil {
-					result.Deleted++
-					// Try to remove empty parent directories
-					o.cleanEmptyDirs(filepath.Dir(destFull))
-				}
-			}
-		}
-	}
-
-	// Save new state
-	o.db = newState
-	if err := o.saveDB(); err != nil {
-		o.logger.Error().Err(err).Msg("Failed to save organizer database")
-	}
-
-	return result
-}
-
-// cleanEmptyDirs removes empty directories up to the organized root.
-func (o *Organizer) cleanEmptyDirs(dir string) {
-	for dir != o.organizedDir && strings.HasPrefix(dir, o.organizedDir) {
-		entries, err := os.ReadDir(dir)
-		if err != nil || len(entries) > 0 {
-			break
-		}
-		os.Remove(dir)
-		dir = filepath.Dir(dir)
-	}
-}
-
-// fileExists checks if a file exists.
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	return ratingIdx <= maxIdx
 }
