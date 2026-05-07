@@ -50,12 +50,16 @@ func New(cfg *config.Config) *Client {
 		torrentsRL = rate.NewLimiter(rate.Limit(0.4), 1) // ~25 req/min
 	}
 
-	// General client for most endpoints
+	// General client for most endpoints.
+	// MaxRetries is kept low (2) because UnrestrictLink has its own
+	// app-level retry with longer, jittered backoff for 503/429.
+	// Doubling up HTTP-level and app-level retries would amplify load
+	// when the RD API is already struggling.
 	generalClient := request.New(
 		request.WithHeaders(headers),
 		request.WithRateLimiter(generalRL),
 		request.WithLogger(log),
-		request.WithMaxRetries(5),
+		request.WithMaxRetries(2),
 		request.WithRetryableStatus(429, 502, 503),
 	)
 
@@ -64,7 +68,7 @@ func New(cfg *config.Config) *Client {
 		request.WithHeaders(headers),
 		request.WithRateLimiter(torrentsRL),
 		request.WithLogger(log),
-		request.WithMaxRetries(5),
+		request.WithMaxRetries(2),
 		request.WithRetryableStatus(429, 502, 503),
 	)
 
@@ -74,8 +78,8 @@ func New(cfg *config.Config) *Client {
 		request.WithHeaders(headers),
 		request.WithRateLimiter(generalRL),
 		request.WithLogger(log),
-		request.WithTimeout(10 * time.Second),
 		request.WithMaxRetries(0),
+		request.WithTimeout(10 * time.Second),
 	)
 
 	return &Client{

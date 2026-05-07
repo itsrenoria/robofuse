@@ -45,10 +45,6 @@ func FormatSummary(result *RunResult, opts SummaryOptions) string {
 
 	parts = append(parts, fmt.Sprintf("strm_created=%d strm_updated=%d strm_removed=%d strm_unchanged=%d", result.STRMAdded, result.STRMUpdated, result.STRMDeleted, result.STRMSkipped))
 
-	if opts.IncludeOrg {
-		parts = append(parts, fmt.Sprintf("org_created=%d org_updated=%d org_removed=%d", result.OrgNew, result.OrgUpdated, result.OrgDeleted))
-	}
-
 	if result.Duration > 0 {
 		parts = append(parts, fmt.Sprintf("duration=%s", result.Duration.Round(time.Millisecond)))
 	}
