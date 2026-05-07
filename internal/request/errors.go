@@ -4,9 +4,11 @@ package request
 
 // HTTPError represents an HTTP error with status code and message
 type HTTPError struct {
-	StatusCode int
-	Message    string
-	Code       string
+	StatusCode   int    `json:"status_code"`
+	Message      string `json:"message"`
+	Code         string `json:"code"`
+	RDErrorCode  int    `json:"rd_error_code,omitempty"`  // Real-Debrid error_code from response body
+	RDError      string `json:"rd_error,omitempty"`        // Real-Debrid error message from response body
 }
 
 func (e *HTTPError) Error() string {

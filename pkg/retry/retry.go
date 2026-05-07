@@ -1,11 +1,14 @@
 package retry
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/natefinch/atomic"
 	"github.com/robofuse/robofuse/internal/logger"
 	"github.com/rs/zerolog"
 )
@@ -78,11 +81,18 @@ func (q *Queue) Add(link, torrentID, filename, errorType, errorMsg string) {
 	}
 
 	q.items = append(q.items, item)
-	q.logger.Info().
+	logEvt := q.logger.Info().
 		Str("link", link).
 		Str("filename", filename).
-		Str("errorType", errorType).
-		Msg("Added to retry queue")
+		Str("errorType", errorType)
+	if torrentID != "" {
+		logEvt.Str("torrentID", torrentID)
+	}
+	// Include the error detail if it contains more than just the error type
+	if errorMsg != "" && errorMsg != errorType {
+		logEvt.Str("error", errorMsg)
+	}
+	logEvt.Msg("Added to retry queue")
 }
 
 // GetAll returns all items in the queue
@@ -139,7 +149,10 @@ func (q *Queue) Save() error {
 		return err
 	}
 
-	if err := os.WriteFile(q.queueFile, data, 0644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(q.queueFile), 0755); err != nil {
+		return err
+	}
+	if err := atomic.WriteFile(q.queueFile, bytes.NewReader(data)); err != nil {
 		return err
 	}
 
