@@ -10,9 +10,10 @@ import (
 
 // Torrent represents a torrent in Real-Debrid
 type Torrent struct {
-	ID       string    `json:"id"`
-	Filename string    `json:"filename"`
-	Hash     string    `json:"hash"`
+	ID               string    `json:"id"`
+	Filename         string    `json:"filename"`
+	OriginalFilename string    `json:"-"` // from /torrents/info/{id}, used as library folder
+	Hash             string    `json:"hash"`
 	Bytes    int64     `json:"bytes"`
 	Status   string    `json:"status"`
 	Progress float64   `json:"progress"`
