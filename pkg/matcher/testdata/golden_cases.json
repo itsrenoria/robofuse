@@ -1,0 +1,102 @@
+[
+  {
+    "name": "coraline-rutracker-remux",
+    "input": {
+      "torrent_folder": "Coraline.2009.US.Shout!.Factory.UHD.BDRemux.2160p-rutracker.mkv",
+      "original_filename": "Coraline.2009.US.Shout!.Factory.UHD.BDRemux.2160p-rutracker.mkv",
+      "filenames": ["Coraline.2009.US.Shout!.Factory.UHD.BDRemux.2160p-rutracker.mkv"],
+      "rd_type": "movie"
+    },
+    "want_mode": "folder",
+    "want_type": "movie",
+    "want_title": "Coraline",
+    "want_year": 2009
+  },
+  {
+    "name": "bluey-animation-series-not-anime",
+    "input": {
+      "torrent_folder": "Bluey.S03E49.iNTERNAL.XviD-AFG[EZTVx.to].avi",
+      "original_filename": "Bluey.S03E49.iNTERNAL.XviD-AFG[EZTVx.to].avi",
+      "filenames": ["Bluey.S03E49.iNTERNAL.XviD-AFG[EZTVx.to].avi"],
+      "rd_type": "show",
+      "has_season_markers": true
+    },
+    "want_mode": "folder",
+    "want_type": "series",
+    "want_title": "Bluey",
+    "want_year": 2018
+  },
+  {
+    "name": "landman-complete-season",
+    "input": {
+      "torrent_folder": "Landman.S01.COMPLETE.2160p.AMZN.WEB-DL.MULTi.DDP5.1.H265.MP4-BEN.THE.MEN",
+      "original_filename": "Landman.S01.COMPLETE.2160p.AMZN.WEB-DL.MULTi.DDP5.1.H265.MP4-BEN.THE.MEN",
+      "filenames": ["Landman.S01E01.2160p.AMZN.WEB-DL.mkv"],
+      "rd_type": "show",
+      "has_season_markers": true
+    },
+    "want_mode": "folder",
+    "want_type": "series",
+    "want_title": "Landman",
+    "want_year": 2024
+  },
+  {
+    "name": "one-piece-keyword-anime",
+    "input": {
+      "torrent_folder": "One.Piece.S22E01.1080p.WEB-DL.x265-GROUP.mkv",
+      "original_filename": "One.Piece.S22E01.1080p.WEB-DL.x265-GROUP.mkv",
+      "filenames": ["One.Piece.S22E01.1080p.WEB-DL.x265-GROUP.mkv"],
+      "rd_type": "show",
+      "has_season_markers": true
+    },
+    "want_mode": "folder",
+    "want_type": "anime",
+    "want_title": "One Piece",
+    "want_year": 1999
+  },
+  {
+    "name": "hobbit-trilogy-per-file",
+    "input": {
+      "torrent_folder": "The Hobbit_ The Motion Picture Trilogy (2012-2014) Extended Edition 3x UHD100 MKVRemux 2160p Vision Atmos NL",
+      "original_filename": "The Hobbit_ The Motion Picture Trilogy (2012-2014) Extended Edition 3x UHD100 MKVRemux 2160p Vision Atmos NL",
+      "filenames": [
+        "The.Hobbit.An.Unexpected.Journey.2012.Extended.2160p.UHD.BDRemux.mkv",
+        "The.Hobbit.The.Desolation.of.Smaug.2013.Extended.2160p.UHD.BDRemux.mkv",
+        "The.Hobbit.The.Battle.of.the.Five.Armies.2014.Extended.2160p.UHD.BDRemux.mkv"
+      ],
+      "rd_type": "movie"
+    },
+    "want_mode": "per-file",
+    "want_type": "",
+    "want_per_file_titles": {
+      "0": "The Hobbit: An Unexpected Journey",
+      "1": "The Hobbit: The Desolation of Smaug",
+      "2": "The Hobbit: The Battle of the Five Armies"
+    }
+  },
+  {
+    "name": "brat-2-distorted-title",
+    "input": {
+      "torrent_folder": "Br4t.2.2000.RUS.DUB.1080p.WEB-DL.x265-Goblin.mkv",
+      "original_filename": "Br4t.2.2000.RUS.DUB.1080p.WEB-DL.x265-Goblin.mkv",
+      "filenames": ["Br4t.2.2000.RUS.DUB.1080p.WEB-DL.x265-Goblin.mkv"],
+      "rd_type": "movie"
+    },
+    "want_mode": "folder",
+    "want_type": "movie",
+    "want_title": "Brat 2",
+    "want_year": 2000,
+    "want_queries": ["Brat 2"]
+  },
+  {
+    "name": "ambiguous-no-year-same-title-unmatched",
+    "input": {
+      "torrent_folder": "Pulse.1080p.WEB-DL.x265-GROUP.mkv",
+      "original_filename": "Pulse.1080p.WEB-DL.x265-GROUP.mkv",
+      "filenames": ["Pulse.1080p.WEB-DL.x265-GROUP.mkv"],
+      "rd_type": "movie"
+    },
+    "want_mode": "folder",
+    "want_type": "unmatched"
+  }
+]
