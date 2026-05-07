@@ -288,6 +288,12 @@ func (c *Config) MatchFolderRule(folderName string) *FolderRule {
 
 // IsAdultFolder returns true if the folder name matches any adult pattern
 // (from adult_patterns config or folder_rules with skip_tmdb).
+//
+// Note: FolderRules with skip_tmdb set are treated as adult-routing since
+// the primary use case for skip_tmdb is to bypass TMDB matching for content
+// that shouldn't be indexed (adult, home video, etc.). Users who need
+// skip_tmdb for non-adult content should use a target folder other than
+// the conventional "X" adult target.
 func (c *Config) IsAdultFolder(folderName string) bool {
 	// Check deprecated adult_patterns
 	for _, p := range c.AdultPatterns {

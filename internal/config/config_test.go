@@ -9,6 +9,8 @@ import (
 func TestLoadBasicConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("ROBOFUSE_CONFIG", "")
+	t.Setenv("ROBOFUSE_TOKEN", "")
+	t.Setenv("ROBOFUSE_LOG_LEVEL", "")
 
 	configPath := filepath.Join(dir, "config.json")
 	data := []byte(`{"token":"test-real-debrid-token"}` + "\n")

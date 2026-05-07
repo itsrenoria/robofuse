@@ -212,9 +212,13 @@ func (c *Client) MakeRequest(req *http.Request) ([]byte, error) {
 		}
 	}()
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(res.Body, 10*1024*1024)) // 10 MB limit
+	const maxBodySize = 10 * 1024 * 1024 // 10 MB
+	bodyBytes, err := io.ReadAll(io.LimitReader(res.Body, maxBodySize+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+	if len(bodyBytes) > maxBodySize {
+		return nil, fmt.Errorf("response body exceeds %d MB limit", maxBodySize/(1024*1024))
 	}
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
@@ -276,7 +280,7 @@ func New(options ...ClientOption) *Client {
 		if client.proxy != "" {
 			proxyURL, err := url.Parse(client.proxy)
 			if err != nil {
-				client.logger.Error().Msgf("Failed to parse proxy URL: %v", err)
+				client.logger.Warn().Msgf("Invalid proxy URL %q — proceeding without proxy: %v", client.proxy, err)
 			} else {
 				transport.Proxy = http.ProxyURL(proxyURL)
 			}
@@ -383,7 +387,7 @@ func IsRetryableError(err error) bool {
 
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		if netErr.Timeout() || netErr.Temporary() {
+		if netErr.Timeout() {
 			return true
 		}
 	}
@@ -398,7 +402,7 @@ func IsRetryableError(err error) bool {
 		}
 
 		if httpErr.Code == "server_unavailable_retryable" ||
-			httpErr.Code == "rate_limit_retryable" {
+			httpErr.Code == "rate_limit_exceeded" {
 			return true
 		}
 	}

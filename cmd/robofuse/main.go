@@ -34,12 +34,15 @@ with media players like Infuse, Jellyfin, and Emby.`,
 			if logLevel != "" {
 				logger.SetLogLevel(logLevel)
 			}
-			go func() {
-				mux := http.NewServeMux()
-				mux.Handle("/healthz", health.Handler())
-				mux.Handle("/metrics", metrics.Handler())
-				http.ListenAndServe("127.0.0.1:9090", mux)
-			}()
+		go func() {
+			mux := http.NewServeMux()
+			mux.Handle("/healthz", health.Handler())
+			mux.Handle("/metrics", metrics.Handler())
+			if err := http.ListenAndServe("127.0.0.1:9090", mux); err != nil {
+				fmt.Fprintf(os.Stderr, "Observability server failed: %v\n", err)
+				os.Exit(1)
+			}
+		}()
 			return nil
 		},
 	}
@@ -119,35 +122,45 @@ func runSync(cfg *config.Config, dryRun bool) {
 	if rebuildOrganized && !dryRun {
 		fmt.Println("Rebuilding organized library from scratch...")
 
-		cwd, _ := os.Getwd()
-		allowedBases := []string{cwd, "/data", "/config"}
+		var allowedBases []string
+		if cwd, err := os.Getwd(); err == nil {
+			allowedBases = append(allowedBases, cwd)
+		}
+		allowedBases = append(allowedBases, "/data", "/config")
 
-		safeRemoveAll := func(path string) {
+		safeRemoveAll := func(path string) error {
 			if path == "" {
-				return
+				return nil
 			}
 			absPath, err := filepath.Abs(path)
 			if err != nil {
-				fmt.Printf("WARNING: cannot resolve path %s — skipping\n", path)
-				return
+				return fmt.Errorf("cannot resolve path %s: %w", path, err)
 			}
 			ok := false
 			for _, base := range allowedBases {
-				if strings.HasPrefix(absPath, base+string(filepath.Separator)) || absPath == base {
+				if strings.HasPrefix(absPath, base+string(filepath.Separator)) {
 					ok = true
 					break
 				}
 			}
 			if !ok {
-				fmt.Printf("WARNING: %s is outside safe paths — skipping rebuild for safety\n", absPath)
-				return
+				return fmt.Errorf("%s is outside safe paths — refusing to delete for safety", absPath)
 			}
 			fmt.Printf("  Removing: %s\n", path)
-			os.RemoveAll(path)
+			if err := os.RemoveAll(path); err != nil {
+				return fmt.Errorf("failed to remove %s: %w", path, err)
+			}
+			return nil
 		}
 
-		safeRemoveAll(cfg.OrganizedDir)
-		safeRemoveAll(cfg.TrackingFile)
+		if err := safeRemoveAll(cfg.OrganizedDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Rebuild error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := safeRemoveAll(cfg.TrackingFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Rebuild error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	result, err := service.Run(dryRun)
