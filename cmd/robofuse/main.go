@@ -33,6 +33,8 @@ with media players like Infuse, Jellyfin, and Emby.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if logLevel != "" {
 				logger.SetLogLevel(logLevel)
+			} else if cfg, err := config.Load(cfgPath); err == nil && cfg.LogLevel != "" {
+				logger.SetLogLevel(cfg.LogLevel)
 			}
 		go func() {
 			mux := http.NewServeMux()
@@ -177,6 +179,11 @@ func runSync(cfg *config.Config, dryRun bool) {
 }
 
 func runWatch(cfg *config.Config) {
+	if rebuildOrganized {
+		fmt.Fprintln(os.Stderr, "--rebuild-organized is only valid with 'run' or 'dry-run'")
+		os.Exit(1)
+	}
+
 	log := logger.Default()
 
 	service := sync.New(cfg)

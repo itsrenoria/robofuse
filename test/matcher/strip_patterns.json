@@ -1,0 +1,15 @@
+[
+  "\\bCompl(ete)?\\b",
+  "\\bBDRemux\\b",
+  "\\bBDRip\\b",
+  "\\bWEB-?DL\\b",
+  "\\bWEBRip\\b",
+  "\\bBlu-?Ray\\b",
+  "\\bHDTV\\b",
+  "\\bDVDRip\\b",
+  "\\bHDRip\\b",
+  "\\bNNMClub\\b",
+  "\\bRutracker\\b",
+  "\\b(AMZN|NF|DSNP|HMAX|ATVP|PMTP)\\b",
+  "www\\.\\S+\\.\\S+\\s*[-–—]\\s*"
+]
