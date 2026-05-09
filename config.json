@@ -1,5 +1,5 @@
 {
-  "_comment": "robofuse configuration — all keys with their defaults",
+  "_comment": "robofuse example configuration — not exhaustive; see Config struct for all available keys",
   "token": "YOUR_RD_API_TOKEN",
 
   "_directories": "Output and cache directories",

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -222,11 +223,23 @@ func (c *Client) MakeRequest(req *http.Request) ([]byte, error) {
 	}
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, &HTTPError{
+		httpErr := &HTTPError{
 			StatusCode: res.StatusCode,
 			Message:    fmt.Sprintf("HTTP %d: %s", res.StatusCode, string(bodyBytes)),
 			Code:       fmt.Sprintf("http_%d", res.StatusCode),
 		}
+
+		// Try to extract Real-Debrid-specific error details from the response body.
+		var rd struct {
+			ErrorCode int    `json:"error_code"`
+			Error     string `json:"error"`
+		}
+		if json.Unmarshal(bodyBytes, &rd) == nil {
+			httpErr.RDErrorCode = rd.ErrorCode
+			httpErr.RDError = rd.Error
+		}
+
+		return nil, httpErr
 	}
 
 	return bodyBytes, nil
@@ -260,13 +273,14 @@ func New(options ...ClientOption) *Client {
 		headers: make(map[string]string),
 	}
 
-	client.client = &http.Client{
-		Timeout: client.timeout,
-	}
+	client.client = &http.Client{}
 
 	for _, option := range options {
 		option(client)
 	}
+
+	// Apply timeout after options so WithTimeout() can override the default.
+	client.client.Timeout = client.timeout
 
 	if client.client.Transport == nil {
 		transport := &http.Transport{

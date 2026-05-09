@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/robofuse/robofuse/internal/config"
 	"github.com/robofuse/robofuse/internal/health"
@@ -34,15 +35,28 @@ with media players like Infuse, Jellyfin, and Emby.`,
 			if logLevel != "" {
 				logger.SetLogLevel(logLevel)
 			}
-		go func() {
-			mux := http.NewServeMux()
-			mux.Handle("/healthz", health.Handler())
-			mux.Handle("/metrics", metrics.Handler())
-			if err := http.ListenAndServe("127.0.0.1:9090", mux); err != nil {
-				fmt.Fprintf(os.Stderr, "Observability server failed: %v\n", err)
-				os.Exit(1)
+
+			// Only start observability server for operational commands, not
+			// --help/--version/completion. Use a timed select on an error
+			// channel so port-bind failures are caught deterministically.
+			switch cmd.Name() {
+			case "run", "watch", "dry-run":
+				errCh := make(chan error, 1)
+				go func() {
+					mux := http.NewServeMux()
+					mux.Handle("/healthz", health.Handler())
+					mux.Handle("/metrics", metrics.Handler())
+					errCh <- http.ListenAndServe("127.0.0.1:9090", mux)
+				}()
+
+				select {
+				case err := <-errCh:
+					return fmt.Errorf("observability server failed: %w", err)
+				case <-time.After(50 * time.Millisecond):
+					// Server likely started successfully.
+				}
 			}
-		}()
+
 			return nil
 		},
 	}

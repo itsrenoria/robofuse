@@ -80,6 +80,7 @@ type FolderRule struct {
 	Pattern  string `json:"pattern"`   // substring or regex match on torrent folder (use ~ prefix for regex)
 	Target   string `json:"target"`    // destination folder (e.g. "X", "Anime", "Documentary")
 	SkipTMDB bool   `json:"skip_tmdb"` // skip TMDB matching for this folder
+	Adult    bool   `json:"adult"`     // mark this content as adult (route to adult folder, skip metadata)
 }
 
 // MatchingConfig holds configuration for the TMDB matching pipeline.
@@ -156,16 +157,21 @@ func defaults() *Config {
 func Load(configPath string) (*Config, error) {
 	cfg := defaults()
 
-	// Try to find config file — ROBOFUSE_CONFIG env var takes priority
-	// over the default search paths.
+	// Build search path list. ROBOFUSE_CONFIG env var wins over the
+	// passed configPath when set (checked first).
 	envConfigPath := os.Getenv("ROBOFUSE_CONFIG")
-	paths := []string{
-		configPath,
-		envConfigPath,
+	paths := []string{}
+	if envConfigPath != "" {
+		paths = append(paths, envConfigPath)
+	}
+	if configPath != "" {
+		paths = append(paths, configPath)
+	}
+	paths = append(paths,
 		"config.json",
 		"/data/config.json",
 		filepath.Join(os.Getenv("HOME"), ".config/robofuse/config.json"),
-	}
+	)
 
 	var configFile string
 	for _, p := range paths {
@@ -205,7 +211,9 @@ func Load(configPath string) (*Config, error) {
 
 	// Apply environment variable overrides (ROBOFUSE_*).
 	// These take precedence over file-based values.
-	cfg.applyEnvOverrides()
+	if err := cfg.applyEnvOverrides(); err != nil {
+		return nil, err
+	}
 
 	if err := cfg.loadExcludeKeywords(); err != nil {
 		return nil, err
@@ -257,6 +265,16 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("min_file_size_mb must be >= 0")
 	}
 
+	// Validate folder rule regex patterns at startup so malformed
+	// patterns fail fast rather than being silently dropped at runtime.
+	for i, r := range c.FolderRules {
+		if strings.HasPrefix(r.Pattern, "~") {
+			if _, err := regexp.Compile(r.Pattern[1:]); err != nil {
+				return fmt.Errorf("folder_rules[%d] pattern %q: invalid regex: %w", i, r.Pattern, err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -287,13 +305,7 @@ func (c *Config) MatchFolderRule(folderName string) *FolderRule {
 }
 
 // IsAdultFolder returns true if the folder name matches any adult pattern
-// (from adult_patterns config or folder_rules with skip_tmdb).
-//
-// Note: FolderRules with skip_tmdb set are treated as adult-routing since
-// the primary use case for skip_tmdb is to bypass TMDB matching for content
-// that shouldn't be indexed (adult, home video, etc.). Users who need
-// skip_tmdb for non-adult content should use a target folder other than
-// the conventional "X" adult target.
+// (from adult_patterns config or folder_rules with adult flag set).
 func (c *Config) IsAdultFolder(folderName string) bool {
 	// Check deprecated adult_patterns
 	for _, p := range c.AdultPatterns {
@@ -301,8 +313,8 @@ func (c *Config) IsAdultFolder(folderName string) bool {
 			return true
 		}
 	}
-	// Check folder_rules with skip_tmdb
-	if r := c.MatchFolderRule(folderName); r != nil && r.SkipTMDB {
+	// Check folder_rules with adult flag
+	if r := c.MatchFolderRule(folderName); r != nil && r.Adult {
 		return true
 	}
 	return false
@@ -357,27 +369,34 @@ func (c *Config) loadExcludeKeywords() error {
 
 // applyEnvOverrides applies ROBOFUSE_* environment variables on top of the
 // file-loaded config. Only set (non-empty) variables override; unset variables
-// leave the existing value untouched.
-func (c *Config) applyEnvOverrides() {
+// leave the existing value untouched. Returns an error if an env var has an
+// invalid value (e.g. non-numeric ROBOFUSE_CONCURRENT_REQUESTS).
+func (c *Config) applyEnvOverrides() error {
 	// Helper closures to keep the code compact.
 	envStr := func(key string, target *string) {
 		if v := os.Getenv(key); v != "" {
 			*target = v
 		}
 	}
-	envInt := func(key string, target *int) {
+	envInt := func(key string, target *int) error {
 		if v := os.Getenv(key); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				*target = n
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("invalid value for %s: %q (expected integer)", key, v)
 			}
+			*target = n
 		}
+		return nil
 	}
-	envBool := func(key string, target *bool) {
+	envBool := func(key string, target *bool) error {
 		if v := os.Getenv(key); v != "" {
-			if b, err := strconv.ParseBool(v); err == nil {
-				*target = b
+			b, err := strconv.ParseBool(v)
+			if err != nil {
+				return fmt.Errorf("invalid value for %s: %q (expected boolean)", key, v)
 			}
+			*target = b
 		}
+		return nil
 	}
 
 	// Core settings
@@ -385,36 +404,78 @@ func (c *Config) applyEnvOverrides() {
 	envStr("ROBOFUSE_OUTPUT_DIR", &c.OutputDir)
 	envStr("ROBOFUSE_ORGANIZED_DIR", &c.OrganizedDir)
 	envStr("ROBOFUSE_CACHE_DIR", &c.CacheDir)
-	envInt("ROBOFUSE_CONCURRENT_REQUESTS", &c.ConcurrentRequests)
-	envInt("ROBOFUSE_GENERAL_RATE_LIMIT", &c.GeneralRateLimit)
-	envInt("ROBOFUSE_TORRENTS_RATE_LIMIT", &c.TorrentsRateLimit)
-	envBool("ROBOFUSE_WATCH_MODE", &c.WatchMode)
-	envInt("ROBOFUSE_WATCH_MODE_INTERVAL", &c.WatchModeInterval)
-	envBool("ROBOFUSE_REPAIR_TORRENTS", &c.RepairTorrents)
-	envInt("ROBOFUSE_MIN_FILE_SIZE_MB", &c.MinFileSizeMB)
+	if err := envInt("ROBOFUSE_CONCURRENT_REQUESTS", &c.ConcurrentRequests); err != nil {
+		return err
+	}
+	if err := envInt("ROBOFUSE_GENERAL_RATE_LIMIT", &c.GeneralRateLimit); err != nil {
+		return err
+	}
+	if err := envInt("ROBOFUSE_TORRENTS_RATE_LIMIT", &c.TorrentsRateLimit); err != nil {
+		return err
+	}
+	if err := envBool("ROBOFUSE_WATCH_MODE", &c.WatchMode); err != nil {
+		return err
+	}
+	if err := envInt("ROBOFUSE_WATCH_MODE_INTERVAL", &c.WatchModeInterval); err != nil {
+		return err
+	}
+	if err := envBool("ROBOFUSE_REPAIR_TORRENTS", &c.RepairTorrents); err != nil {
+		return err
+	}
+	if err := envInt("ROBOFUSE_MIN_FILE_SIZE_MB", &c.MinFileSizeMB); err != nil {
+		return err
+	}
 	envStr("ROBOFUSE_LOG_LEVEL", &c.LogLevel)
-	envBool("ROBOFUSE_PTT_RENAME", &c.PttRename)
+	if err := envBool("ROBOFUSE_PTT_RENAME", &c.PttRename); err != nil {
+		return err
+	}
 	envStr("ROBOFUSE_EXCLUDE_KEYWORDS_FILE", &c.ExcludeKeywordsFile)
 	envStr("ROBOFUSE_MATCHER_DICTIONARY_DIR", &c.MatcherDictionaryDir)
 
 	// Tracking
 	envStr("ROBOFUSE_TRACKING_FILE", &c.TrackingFile)
-	envInt("ROBOFUSE_FILE_EXPIRY_DAYS", &c.FileExpiryDays)
+	if err := envInt("ROBOFUSE_FILE_EXPIRY_DAYS", &c.FileExpiryDays); err != nil {
+		return err
+	}
 
 	// Retry queue
 	envStr("ROBOFUSE_RETRY_QUEUE_FILE", &c.RetryQueueFile)
-	envInt("ROBOFUSE_MAX_RETRY_ATTEMPTS", &c.MaxRetryAttempts)
+	if err := envInt("ROBOFUSE_MAX_RETRY_ATTEMPTS", &c.MaxRetryAttempts); err != nil {
+		return err
+	}
 
 	// ffprobe
-	envBool("ROBOFUSE_ENABLE_FFPROBE", &c.EnableFFProbe)
+	if err := envBool("ROBOFUSE_ENABLE_FFPROBE", &c.EnableFFProbe); err != nil {
+		return err
+	}
 	envStr("ROBOFUSE_FFPROBE_PATH", &c.FFProbePath)
-	envInt("ROBOFUSE_FFPROBE_TIMEOUT", &c.FFProbeTimeout)
-	envInt("ROBOFUSE_PROBE_MAX_RETRIES", &c.ProbeMaxRetries)
-	envBool("ROBOFUSE_STORE_RAW_FFPROBE", &c.StoreRawProbe)
+	if err := envInt("ROBOFUSE_FFPROBE_TIMEOUT", &c.FFProbeTimeout); err != nil {
+		return err
+	}
+	if err := envInt("ROBOFUSE_PROBE_MAX_RETRIES", &c.ProbeMaxRetries); err != nil {
+		return err
+	}
+	if err := envBool("ROBOFUSE_STORE_RAW_FFPROBE", &c.StoreRawProbe); err != nil {
+		return err
+	}
+
+	// TMDB / metadata
+	envStr("ROBOFUSE_TMDB_API_KEY", &c.TMDBAPIKey)
+
+	// Filename templates
+	envStr("ROBOFUSE_MOVIE_NAME_TEMPLATE", &c.MovieNameTemplate)
+	envStr("ROBOFUSE_EPISODE_NAME_TEMPLATE", &c.EpisodeNameTemplate)
 
 	// Content routing
+	envStr("ROBOFUSE_KIDS_MAX_RATING", &c.KidsMaxRating)
 	envStr("ROBOFUSE_KIDS_FOLDER", &c.KidsFolder)
 	envStr("ROBOFUSE_ANIME_FOLDER", &c.AnimeFolder)
 	envStr("ROBOFUSE_MOVIE_FOLDER", &c.MovieFolder)
 	envStr("ROBOFUSE_SERIES_FOLDER", &c.SeriesFolder)
+
+	// Note: compound types (FolderRules, TitleOverrides, Matching,
+	// AdultPatterns) are not currently overridable via environment variables.
+	// Use the config file for these settings.
+
+	return nil
 }

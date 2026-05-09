@@ -32,6 +32,7 @@ func TestLoadBasicConfig(t *testing.T) {
 
 func TestLoadEnvVarOverride(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("ROBOFUSE_CONFIG", "")
 
 	configPath := filepath.Join(dir, "config.json")
 	data := []byte(`{"token":"file-token","log_level":"info"}` + "\n")
