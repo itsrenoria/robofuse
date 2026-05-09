@@ -293,8 +293,15 @@ func New(options ...ClientOption) *Client {
 
 		if client.proxy != "" {
 			proxyURL, err := url.Parse(client.proxy)
-			if err != nil {
-				client.logger.Warn().Msgf("Invalid proxy URL %q — proceeding without proxy: %v", client.proxy, err)
+			// url.Parse is permissive and misparses bare host:port strings
+			// (e.g. "127.0.0.1:8080" becomes scheme="127.0.0.1", host="").
+			// Validate that we have a usable scheme and host.
+			if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" ||
+				(proxyURL.Scheme != "http" && proxyURL.Scheme != "https") {
+				client.logger.Warn().Msgf(
+					"Invalid proxy URL %q (expected http(s)://host[:port]) — proceeding without proxy",
+					client.proxy,
+				)
 			} else {
 				transport.Proxy = http.ProxyURL(proxyURL)
 			}
