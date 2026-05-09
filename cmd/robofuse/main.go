@@ -1,97 +1,103 @@
 package main
 
 import (
-	"flag"
 	"fmt"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/robofuse/robofuse/internal/config"
+	"github.com/robofuse/robofuse/internal/health"
 	"github.com/robofuse/robofuse/internal/logger"
+	"github.com/robofuse/robofuse/internal/metrics"
 	"github.com/robofuse/robofuse/pkg/sync"
+	"github.com/spf13/cobra"
 )
 
-var version = "1.1.2"
+var version = "2.0.0-dev"
+
+var (
+	cfgPath          string
+	logLevel         string
+	rebuildOrganized bool
+)
 
 func main() {
-	// Define flags
-	var (
-		configPath string
-		logLevel   string
-		showHelp   bool
-		showVer    bool
-	)
-
-	flag.StringVar(&configPath, "config", "", "Path to config file")
-	flag.StringVar(&configPath, "c", "", "Path to config file (shorthand)")
-	flag.StringVar(&logLevel, "log-level", "", "Log level (debug, info, warn, error)")
-	flag.BoolVar(&showHelp, "help", false, "Show help")
-	flag.BoolVar(&showHelp, "h", false, "Show help (shorthand)")
-	flag.BoolVar(&showVer, "version", false, "Show version")
-	flag.BoolVar(&showVer, "v", false, "Show version (shorthand)")
-
-	flag.Parse()
-
-	if showVer {
-		fmt.Printf("robofuse v%s\n", version)
-		os.Exit(0)
+	rootCmd := &cobra.Command{
+		Use:   "robofuse",
+		Short: "Real-Debrid STRM file generator",
+		Long: `robofuse generates .strm files from Real-Debrid torrents for use
+with media players like Infuse, Jellyfin, and Emby.`,
+		Version: version,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if logLevel != "" {
+				logger.SetLogLevel(logLevel)
+			}
+		go func() {
+			mux := http.NewServeMux()
+			mux.Handle("/healthz", health.Handler())
+			mux.Handle("/metrics", metrics.Handler())
+			if err := http.ListenAndServe("127.0.0.1:9090", mux); err != nil {
+				fmt.Fprintf(os.Stderr, "Observability server failed: %v\n", err)
+				os.Exit(1)
+			}
+		}()
+			return nil
+		},
 	}
 
-	if showHelp || len(flag.Args()) == 0 {
-		printUsage()
-		os.Exit(0)
-	}
+	rootCmd.PersistentFlags().StringVarP(&cfgPath, "config", "c", "", "Path to config file")
+	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level (debug, info, warn, error)")
+	rootCmd.PersistentFlags().BoolVar(&rebuildOrganized, "rebuild-organized", false, "Delete organized directory and tracking database to force a full rebuild")
 
-	command := strings.ToLower(flag.Arg(0))
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "run",
+		Short: "Run sync once and exit",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(cfgPath)
+			if err != nil {
+				return err
+			}
+			config.SetInstance(cfg)
+			printBanner()
+			runSync(cfg, false)
+			return nil
+		},
+	})
 
-	// Load configuration
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-		os.Exit(1)
-	}
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "watch",
+		Short: "Run sync continuously",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(cfgPath)
+			if err != nil {
+				return err
+			}
+			config.SetInstance(cfg)
+			printBanner()
+			runWatch(cfg)
+			return nil
+		},
+	})
 
-	// Set up logging
-	if logLevel != "" {
-		logger.SetLogLevel(logLevel)
-	} else if cfg.LogLevel != "" {
-		logger.SetLogLevel(cfg.LogLevel)
-	}
-	logger.SetLogPath(cfg.CacheDir)
-	config.SetInstance(cfg)
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "dry-run",
+		Short: "Preview changes without making them",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(cfgPath)
+			if err != nil {
+				return err
+			}
+			config.SetInstance(cfg)
+			printBanner()
+			runSync(cfg, true)
+			return nil
+		},
+	})
 
-	log := logger.Default()
-
-	// Print banner
-	if logger.IsTTY() && logger.IsInfoEnabled() {
-		printBanner()
-	}
-
-	switch command {
-	case "run":
-		log.Info().Msg("run | mode=once dry=false")
-		if logger.IsInfoEnabled() && logger.IsTTY() {
-			fmt.Println()
-		}
-		runSync(cfg, false)
-
-	case "watch":
-		log.Info().Msgf("run | mode=watch interval=%ds", cfg.WatchModeInterval)
-		if logger.IsInfoEnabled() && logger.IsTTY() {
-			fmt.Println()
-		}
-		runWatch(cfg)
-
-	case "dry-run", "dryrun":
-		log.Info().Msg("run | mode=once dry=true")
-		if logger.IsInfoEnabled() && logger.IsTTY() {
-			fmt.Println()
-		}
-		runSync(cfg, true)
-
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		printUsage()
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -109,33 +115,54 @@ func printBanner() {
 	fmt.Println(banner)
 }
 
-func printUsage() {
-	fmt.Printf(`robofuse v%s - Real-Debrid STRM file generator
-
-Usage: robofuse [options] <command>
-
-Commands:
-  run       Run sync once and exit
-  watch     Run sync continuously in watch mode
-  dry-run   Show what would happen without making changes
-
-Options:
-  -c, --config <path>    Path to config file
-  --log-level <level>    Log level (debug, info, warn, error)
-  -v, --version          Show version
-  -h, --help             Show this help
-
-Examples:
-  robofuse run
-  robofuse --config /path/to/config.json watch
-  robofuse dry-run
-`, version)
-}
-
 func runSync(cfg *config.Config, dryRun bool) {
 	log := logger.Default()
-
 	service := sync.New(cfg)
+
+	if rebuildOrganized && !dryRun {
+		fmt.Println("Rebuilding organized library from scratch...")
+
+		var allowedBases []string
+		if cwd, err := os.Getwd(); err == nil {
+			allowedBases = append(allowedBases, cwd)
+		}
+		allowedBases = append(allowedBases, "/data", "/config")
+
+		safeRemoveAll := func(path string) error {
+			if path == "" {
+				return nil
+			}
+			absPath, err := filepath.Abs(path)
+			if err != nil {
+				return fmt.Errorf("cannot resolve path %s: %w", path, err)
+			}
+			ok := false
+			for _, base := range allowedBases {
+				if strings.HasPrefix(absPath, base+string(filepath.Separator)) {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return fmt.Errorf("%s is outside safe paths — refusing to delete for safety", absPath)
+			}
+			fmt.Printf("  Removing: %s\n", path)
+			if err := os.RemoveAll(path); err != nil {
+				return fmt.Errorf("failed to remove %s: %w", path, err)
+			}
+			return nil
+		}
+
+		if err := safeRemoveAll(cfg.OrganizedDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Rebuild error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := safeRemoveAll(cfg.TrackingFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Rebuild error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	result, err := service.Run(dryRun)
 	if err != nil {
 		log.Error().Err(err).Msg("Sync failed")
@@ -146,25 +173,7 @@ func runSync(cfg *config.Config, dryRun bool) {
 		DryRun:     dryRun,
 		IncludeOrg: cfg.PttRename && !dryRun,
 	})
-
-	if logger.IsInfoEnabled() {
-		if logger.IsTTY() {
-			fmt.Println()
-		}
-		log.Info().Msg(summary)
-	} else {
-		if logger.IsTTY() {
-			fmt.Println()
-		}
-		switch logger.GetLogLevel() {
-		case "error":
-			log.Error().Msg(summary)
-		case "warn":
-			log.Warn().Msg(summary)
-		default:
-			log.Info().Msg(summary)
-		}
-	}
+	log.Info().Msg(summary)
 }
 
 func runWatch(cfg *config.Config) {
@@ -175,4 +184,5 @@ func runWatch(cfg *config.Config) {
 		log.Error().Err(err).Msg("Watch mode failed")
 		os.Exit(1)
 	}
+	log.Info().Msg("Watch mode shut down gracefully")
 }

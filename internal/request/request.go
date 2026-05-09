@@ -3,7 +3,6 @@ package request
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 
 	"github.com/robofuse/robofuse/internal/logger"
 	"github.com/rs/zerolog"
-	"golang.org/x/net/proxy"
 	"golang.org/x/time/rate"
 )
 
@@ -164,7 +162,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 
 		resp, err = c.doRequest(req)
 		if err != nil {
-			if isRetryableError(err) && attempt < c.maxRetries {
+			if IsRetryableError(err) && attempt < c.maxRetries {
 				jitter := time.Duration(rand.Int63n(int64(backoff / 4)))
 				sleepTime := backoff + jitter
 
@@ -214,13 +212,21 @@ func (c *Client) MakeRequest(req *http.Request) ([]byte, error) {
 		}
 	}()
 
-	bodyBytes, err := io.ReadAll(res.Body)
+	const maxBodySize = 10 * 1024 * 1024 // 10 MB
+	bodyBytes, err := io.ReadAll(io.LimitReader(res.Body, maxBodySize+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}
+	if len(bodyBytes) > maxBodySize {
+		return nil, fmt.Errorf("response body exceeds %d MB limit", maxBodySize/(1024*1024))
+	}
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP error %d: %s", res.StatusCode, string(bodyBytes))
+		return nil, &HTTPError{
+			StatusCode: res.StatusCode,
+			Message:    fmt.Sprintf("HTTP %d: %s", res.StatusCode, string(bodyBytes)),
+			Code:       fmt.Sprintf("http_%d", res.StatusCode),
+		}
 	}
 
 	return bodyBytes, nil
@@ -240,7 +246,7 @@ func (c *Client) Get(url string) (*http.Response, error) {
 func New(options ...ClientOption) *Client {
 	client := &Client{
 		maxRetries:    3,
-		skipTLSVerify: true,
+		skipTLSVerify: false,
 		retryableStatus: map[int]struct{}{
 			http.StatusTooManyRequests:     {},
 			http.StatusInternalServerError: {},
@@ -272,34 +278,11 @@ func New(options ...ClientOption) *Client {
 		}
 
 		if client.proxy != "" {
-			if strings.HasPrefix(client.proxy, "socks5://") {
-				socksURL, err := url.Parse(client.proxy)
-				if err != nil {
-					client.logger.Error().Msgf("Failed to parse SOCKS5 proxy URL: %v", err)
-				} else {
-					auth := &proxy.Auth{}
-					if socksURL.User != nil {
-						auth.User = socksURL.User.Username()
-						password, _ := socksURL.User.Password()
-						auth.Password = password
-					}
-
-					dialer, err := proxy.SOCKS5("tcp", socksURL.Host, auth, proxy.Direct)
-					if err != nil {
-						client.logger.Error().Msgf("Failed to create SOCKS5 dialer: %v", err)
-					} else {
-						transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-							return dialer.Dial(network, addr)
-						}
-					}
-				}
+			proxyURL, err := url.Parse(client.proxy)
+			if err != nil {
+				client.logger.Warn().Msgf("Invalid proxy URL %q — proceeding without proxy: %v", client.proxy, err)
 			} else {
-				proxyURL, err := url.Parse(client.proxy)
-				if err != nil {
-					client.logger.Error().Msgf("Failed to parse proxy URL: %v", err)
-				} else {
-					transport.Proxy = http.ProxyURL(proxyURL)
-				}
+				transport.Proxy = http.ProxyURL(proxyURL)
 			}
 		} else {
 			transport.Proxy = http.ProxyFromEnvironment
@@ -383,8 +366,11 @@ func Gzip(body []byte) []byte {
 	return result
 }
 
-// isRetryableError checks if an error is worth retrying
-func isRetryableError(err error) bool {
+// IsRetryableError checks if an error is worth retrying.
+// Handles both network-level errors (connection resets, timeouts)
+// and HTTP-level errors (503, 429, 502, 504 status codes and
+// Real-Debrid sentinel codes).
+func IsRetryableError(err error) bool {
 	errString := err.Error()
 
 	if strings.Contains(errString, "connection reset by peer") ||
@@ -401,7 +387,24 @@ func isRetryableError(err error) bool {
 
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return netErr.Timeout() || netErr.Temporary()
+		if netErr.Timeout() {
+			return true
+		}
+	}
+
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		if httpErr.StatusCode == http.StatusServiceUnavailable ||
+			httpErr.StatusCode == http.StatusBadGateway ||
+			httpErr.StatusCode == http.StatusGatewayTimeout ||
+			httpErr.StatusCode == http.StatusTooManyRequests {
+			return true
+		}
+
+		if httpErr.Code == "server_unavailable_retryable" ||
+			httpErr.Code == "rate_limit_exceeded" {
+			return true
+		}
 	}
 
 	return false
