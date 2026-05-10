@@ -229,10 +229,11 @@ func (s *Service) CleanupOrphans() (deleted int) {
 		}
 		ef := parseSTRMContent(content)
 
-		if ef.Link != "" {
-			if _, ok := s.tracking.GetByLink(ef.Link); ok {
-				return nil
-			}
+		if ef.Link == "" {
+			return nil
+		}
+		if _, ok := s.tracking.GetByLink(ef.Link); ok {
+			return nil
 		}
 
 		if err := os.Remove(path); err != nil {
@@ -322,7 +323,7 @@ func (s *Service) writeSTRM(workDir, relativePath, url, link, torrentID string) 
 	}
 	content += "\n"
 
-	return os.WriteFile(fullPath, []byte(content), 0600)
+	return writeAtomic(fullPath, []byte(content), 0600)
 }
 
 // writeSTRMJSON updates a .strm file's second line with full JSON metadata.
@@ -387,7 +388,32 @@ func (s *Service) writeSTRMJSON(workDir, filePath, trackingKey, url, link, torre
 	metaJSON, _ := json.Marshal(meta)
 
 	content := urlLine + "\n#robofuse:" + string(metaJSON) + "\n"
-	return os.WriteFile(fullPath, []byte(content), 0600)
+	return writeAtomic(fullPath, []byte(content), 0600)
+}
+
+// writeAtomic writes data to a file atomically by writing to a temp file and renaming.
+func writeAtomic(path string, content []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".strm-tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := f.Name()
+
+	if _, err := f.Write(content); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // writeNFO creates a Kodi-compatible .nfo file alongside the .strm file.

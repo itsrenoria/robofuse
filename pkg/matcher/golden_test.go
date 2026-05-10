@@ -74,6 +74,9 @@ func TestGoldenMatcherDecisionsOffline(t *testing.T) {
 				if err != nil {
 					t.Fatalf("bad per-file index %q in golden case: %v", idx, err)
 				}
+				if i >= len(got.PerFile) {
+					t.Fatalf("per-file index %d out of range (len=%d), want %q", i, len(got.PerFile), wantTitle)
+				}
 				match := got.PerFile[i]
 				if match == nil {
 					t.Fatalf("per-file match %d is nil, want %q", i, wantTitle)

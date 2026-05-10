@@ -448,7 +448,8 @@ func likelyTypeFromEvidence(ev parseEvidence, input Input) string {
 func (m *Matcher) isAnimeKeyword(content string) bool {
 	lower := strings.ToLower(content)
 	for _, kw := range m.cfg.AnimeKeywords {
-		if strings.EqualFold(lower, kw) || strings.Contains(lower, kw) {
+		kwLower := strings.ToLower(kw)
+		if lower == kwLower || strings.Contains(lower, kwLower) {
 			return true
 		}
 	}

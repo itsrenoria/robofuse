@@ -110,6 +110,7 @@ type FolderRule struct {
 	Pattern  string `json:"pattern"`   // substring or regex match on torrent folder (use ~ prefix for regex)
 	Target   string `json:"target"`    // destination folder (e.g. "X", "Anime", "Documentary")
 	SkipTMDB bool   `json:"skip_tmdb"` // skip TMDB matching for this folder
+	Adult    bool   `json:"adult"`     // route this content to adult section
 }
 
 // MatchingConfig holds configuration for the TMDB matching pipeline.
@@ -432,9 +433,21 @@ func (c *Config) IsAdultFolder(folderName string) bool {
 			return true
 		}
 	}
-	// Check folder_rules with skip_tmdb
-	if r := c.MatchFolderRule(folderName); r != nil && r.SkipTMDB {
-		return true
+	// Check all folder_rules with explicit adult flag
+	lower := strings.ToLower(folderName)
+	for i := range c.FolderRules {
+		r := &c.FolderRules[i]
+		if !r.Adult || r.Pattern == "" {
+			continue
+		}
+		if strings.HasPrefix(r.Pattern, "~") {
+			re, err := regexp.Compile(r.Pattern[1:])
+			if err == nil && re.MatchString(folderName) {
+				return true
+			}
+		} else if strings.Contains(lower, strings.ToLower(r.Pattern)) {
+			return true
+		}
 	}
 	return false
 }

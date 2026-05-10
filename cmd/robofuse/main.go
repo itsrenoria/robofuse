@@ -132,7 +132,10 @@ func runSync(cfg *config.Config, dryRun bool) {
 	if rebuildOrganized && !dryRun {
 		fmt.Println("Rebuilding organized library from scratch...")
 
-		cwd, _ := os.Getwd()
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Printf("WARNING: cannot determine working directory: %v\n", err)
+		}
 		allowedBases := []string{cwd, "/data", "/config"}
 
 		safeRemoveAll := func(path string) {

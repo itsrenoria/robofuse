@@ -69,6 +69,7 @@ type FolderRule struct {
 	Pattern  string
 	Target   string
 	SkipTMDB bool
+	Adult    bool
 }
 
 // ExistingFolderOptions holds inputs for FindExistingSeriesFolder.
@@ -221,7 +222,7 @@ func isAdultPath(sourceRelPath string, adultPatterns []string, folderRules []Fol
 		}
 	}
 	for _, r := range folderRules {
-		if r.Pattern == "" {
+		if !r.Adult || r.Pattern == "" {
 			continue
 		}
 		if strings.HasPrefix(r.Pattern, "~") {
@@ -242,7 +243,7 @@ func isAdultPath(sourceRelPath string, adultPatterns []string, folderRules []Fol
 		}
 	}
 	for _, r := range folderRules {
-		if r.Pattern == "" {
+		if !r.Adult || r.Pattern == "" {
 			continue
 		}
 		if strings.HasPrefix(r.Pattern, "~") {
@@ -267,7 +268,13 @@ func buildAdultPath(sourceRelPath, filename, rdID string, folderRules []FolderRu
 	target := "X"
 	folderLower := strings.ToLower(filepath.Dir(sourceRelPath))
 	for _, r := range folderRules {
-		if r.Pattern != "" && strings.Contains(folderLower, strings.ToLower(r.Pattern)) {
+		if r.Pattern == "" {
+			continue
+		}
+		if !r.Adult {
+			continue
+		}
+		if strings.Contains(folderLower, strings.ToLower(r.Pattern)) {
 			target = r.Target
 			break
 		}
@@ -433,7 +440,7 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 	}
 
 	// TMDB override: if we have an official match, use its title, year, and type
-	if opts.TMDBTitle != "" {
+	if opts.TMDBTitle != "" && finalType != "adult" {
 		wasAnime := finalType == "anime"
 		title = opts.TMDBTitle
 		if opts.TMDBYear > 0 {
@@ -488,6 +495,8 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 	animeMovie := opts.TMDBIsAnime && opts.TMDBType == "movie"
 	var baseFolder string
 	switch {
+	case finalType == "adult":
+		return "adult", buildAdultPath(fullRelPath, opts.Filename, opts.RDID, opts.FolderRules)
 	case finalType == "anime" && opts.AnimeFolder != "":
 		baseFolder = safeFolderName(opts.AnimeFolder)
 	case finalType == "anime":
@@ -597,7 +606,17 @@ func mediaBaseName(filename string) string {
 // "Bluey.avi.strm" → ".avi.strm", "Movie.mkv" → ".mkv.strm", "Movie.strm" → ".strm"
 func realSTRMExt(filename string) string {
 	if strings.HasSuffix(strings.ToLower(filename), ".strm") {
-		return filepath.Ext(strings.TrimSuffix(filename, ".strm")) + ".strm"
+		ext := strings.ToLower(filepath.Ext(strings.TrimSuffix(filename, ".strm")))
+		knownExts := map[string]bool{
+			".mp4": true, ".mkv": true, ".avi": true, ".mov": true,
+			".wmv": true, ".flv": true, ".mpeg": true, ".mpg": true,
+			".m4v": true, ".ts": true, ".webm": true, ".vob": true,
+			".m2ts": true, ".3gp": true,
+		}
+		if knownExts[ext] {
+			return ext + ".strm"
+		}
+		return ".strm"
 	}
 	return filepath.Ext(filename) + ".strm"
 }

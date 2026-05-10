@@ -101,6 +101,10 @@ func Write(strmPath string, data *Data) error {
 		os.Remove(tmpPath)
 		return err
 	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
 	return os.Rename(tmpPath, nfoPath)
 }
 
@@ -146,7 +150,7 @@ type xmlEpisode struct {
 
 type xmlUniqueID struct {
 	Type string `xml:"type,attr"`
-	ID   string `xml:",innerxml"`
+	ID   string `xml:",chardata"`
 }
 
 type xmlFileInfo struct {

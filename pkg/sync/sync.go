@@ -377,17 +377,11 @@ func (s *Service) refreshExpiringLinks(ctx context.Context, interval time.Durati
 			continue
 		}
 
-		// Use organized path for file I/O if available
-		filePath := tracking.RelativePath
-		if s.config.PttRename && tracking.OrganizedPath != "" {
-			filePath = tracking.OrganizedPath
-		}
-
 		// Update the STRM file with the new URL
-		if err := s.strmService.UpdateSTRM(filePath, download.Download, tracking.Link, tracking.TorrentID); err != nil {
+		if err := s.strmService.UpdateSTRM(tracking.RelativePath, download.Download, tracking.Link, tracking.TorrentID); err != nil {
 			s.logger.Warn().
 				Err(err).
-				Str("path", filePath).
+				Str("path", tracking.RelativePath).
 				Msg("Failed to update STRM file")
 			failed++
 		} else {
@@ -1389,6 +1383,7 @@ func convertFolderRules(rules []config.FolderRule) []organizer.FolderRule {
 			Pattern:  r.Pattern,
 			Target:   r.Target,
 			SkipTMDB: r.SkipTMDB,
+			Adult:    r.Adult,
 		}
 	}
 	return result
