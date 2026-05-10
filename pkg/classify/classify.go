@@ -54,19 +54,26 @@ func Classify(filename, folderName string, rdType, tmdbType string) *Result {
 		r.Year = util.FirstNonZero(parsed.Year, folderParsed.Year)
 	}
 
-	// RD override
-	if rdType == "show" {
-		r.Type = "episode"
-	} else if rdType == "movie" {
-		r.Type = "movie"
+	applyTypeOverride := func(kind string) {
+		switch kind {
+		case "show":
+			r.Type = "episode"
+			r.ShowTitle = util.FirstNonEmpty(r.ShowTitle, parsed.Title, folderParsed.Title, folderBase)
+			r.Title = util.FirstNonEmpty(r.Title, fn)
+		case "movie":
+			r.Type = "movie"
+			r.Title = util.FirstNonEmpty(parsed.Title, folderParsed.Title, fn)
+			r.ShowTitle = ""
+			r.Season = 0
+			r.Episode = 0
+		}
 	}
 
+	// RD override
+	applyTypeOverride(rdType)
+
 	// TMDB override (highest priority)
-	if tmdbType == "show" {
-		r.Type = "episode"
-	} else if tmdbType == "movie" {
-		r.Type = "movie"
-	}
+	applyTypeOverride(tmdbType)
 
 	return r
 }

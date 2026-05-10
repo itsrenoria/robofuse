@@ -26,7 +26,12 @@ func DefaultDictionaries() DictionaryConfig {
 		},
 		TitleAliases:           map[string][]string{},
 		TransliterationAliases: map[string][]string{},
-		AnimeKeywords:          []string{},
+		AnimeKeywords: []string{
+			"subsplease", "erai-raws", "judas", "ember", "asw",
+			"dkb", "nep_blanc", "lostyears", "akihitosubs",
+			"philosophy-raws", "commie", "coalgirls", "hi10p",
+			"dual audio", "dual-audio", "multi-audio",
+		},
 		CollectionKeywords: []string{
 			"collection", "trilogy", "quadrilogy", "saga", "anthology",
 			"complete", "boxset", "box set", "franchise",

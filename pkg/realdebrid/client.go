@@ -3,6 +3,7 @@ package realdebrid
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/robofuse/robofuse/internal/config"
 	"github.com/robofuse/robofuse/internal/logger"
@@ -73,7 +74,7 @@ func New(cfg *config.Config) *Client {
 		request.WithHeaders(headers),
 		request.WithRateLimiter(generalRL),
 		request.WithLogger(log),
-		request.WithTimeout(10),
+		request.WithTimeout(10 * time.Second),
 		request.WithMaxRetries(0),
 	)
 

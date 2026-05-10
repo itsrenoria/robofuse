@@ -82,10 +82,12 @@ var emptyParenRE = regexp.MustCompile(`\([\s,;._-]*\)`)
 var multiSpaceRE = regexp.MustCompile(`\s{2,}`)
 
 func expandFormatVerb(s, field string, val int) string {
-	re := regexp.MustCompile(fmt.Sprintf(`\{%s:(\d+d)\}`, field))
-	return re.ReplaceAllStringFunc(s, func(match string) string {
+	return formatVerbRE.ReplaceAllStringFunc(s, func(match string) string {
 		parts := formatVerbRE.FindStringSubmatch(match)
 		if len(parts) != 3 {
+			return match
+		}
+		if parts[1] != field {
 			return match
 		}
 		verb := parts[2]
@@ -128,8 +130,6 @@ func HDRLabel(hdr string) string {
 		return ""
 	}
 	switch strings.ToUpper(hdr) {
-	case "HEVC", "H265":
-		return "HDR" // generic HDR for HEVC
 	case "DV", "DOLBYVISION":
 		return "Dolby Vision"
 	case "HDR10", "HDR10PLUS":

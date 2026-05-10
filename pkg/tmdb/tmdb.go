@@ -13,6 +13,7 @@ import (
 
 	"github.com/robofuse/robofuse/internal/logger"
 	"github.com/robofuse/robofuse/internal/request"
+	"github.com/robofuse/robofuse/pkg/namefmt"
 	"github.com/rs/zerolog"
 	"golang.org/x/time/rate"
 )
@@ -289,11 +290,6 @@ func scoreResults[T any](results []T, query string, year int, getInfo func(T) (s
 	}
 
 	if best == nil {
-		// Fallback: return first result
-		if len(results) > 0 {
-			r := results[0]
-			return &r
-		}
 		return nil
 	}
 	r := results[best.idx]
@@ -670,17 +666,7 @@ func BackdropURL(path string) string {
 
 // CleanTitle returns a filesystem-safe version of the title for use in paths.
 func (m *MatchResult) CleanTitle() string {
-	t := m.Title
-	t = strings.ReplaceAll(t, "/", "_")
-	t = strings.ReplaceAll(t, "\\", "_")
-	t = strings.ReplaceAll(t, ":", "_")
-	t = strings.ReplaceAll(t, "*", "_")
-	t = strings.ReplaceAll(t, "?", "_")
-	t = strings.ReplaceAll(t, "\"", "_")
-	t = strings.ReplaceAll(t, "<", "_")
-	t = strings.ReplaceAll(t, ">", "_")
-	t = strings.ReplaceAll(t, "|", "_")
-	return strings.TrimSpace(t)
+	return namefmt.Clean(m.Title)
 }
 
 // ---------------------------------------------------------------------------

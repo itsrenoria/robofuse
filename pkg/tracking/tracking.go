@@ -324,12 +324,8 @@ func (s *Service) SetRDInfo(relativePath string, info *realdebrid.MediaInfoResul
 	entry.RDDuration = info.Duration
 	entry.RDBitrate = info.Bitrate
 	entry.RDMediaFailed = false
-	if info.PosterPath != "" {
-		entry.RDPosterPath = info.PosterPath
-	}
-	if info.BackdropPath != "" {
-		entry.RDBackdropPath = info.BackdropPath
-	}
+	entry.RDPosterPath = info.PosterPath
+	entry.RDBackdropPath = info.BackdropPath
 	entry.RDMediaInfo = info
 }
 

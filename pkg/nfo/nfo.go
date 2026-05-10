@@ -70,6 +70,9 @@ type Data struct {
 //
 //	".../Movie (2024).nfo"
 func Write(strmPath string, data *Data) error {
+	if strings.TrimSpace(strmPath) == "" {
+		return fmt.Errorf("strmPath is empty")
+	}
 	if data == nil {
 		return fmt.Errorf("nfo.Data is nil")
 	}

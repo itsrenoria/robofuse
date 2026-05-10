@@ -261,10 +261,12 @@ func deleet(s string) string {
 }
 
 func levenshteinSimilarity(a, b string) int {
-	dist := levenshteinDist(a, b)
-	maxLen := len(a)
-	if len(b) > maxLen {
-		maxLen = len(b)
+	ar := []rune(a)
+	br := []rune(b)
+	dist := levenshteinDist(ar, br)
+	maxLen := len(ar)
+	if len(br) > maxLen {
+		maxLen = len(br)
 	}
 	if maxLen == 0 {
 		return 100
@@ -292,7 +294,7 @@ func tokenDice(a, b string) int {
 	return 200 * shared / (len(aTokens) + len(bTokens))
 }
 
-func levenshteinDist(a, b string) int {
+func levenshteinDist(a, b []rune) int {
 	la, lb := len(a), len(b)
 	d := make([][]int, la+1)
 	for i := range d {

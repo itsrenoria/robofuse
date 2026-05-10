@@ -114,7 +114,9 @@ func (m *Matcher) cleanCandidateTitle(s string, year int) string {
 		s = re.ReplaceAllString(s, "")
 	}
 	if year > 0 {
-		s = strings.ReplaceAll(s, fmt.Sprintf("%d", year), " ")
+		padded := " " + s + " "
+		padded = strings.Replace(padded, fmt.Sprintf(" %d ", year), " ", 1)
+		s = strings.TrimSpace(padded)
 	}
 	s = m.stripNoiseTokens(s)
 	s = leadingNumRE.ReplaceAllString(s, "")

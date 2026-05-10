@@ -77,7 +77,7 @@ func (m *Matcher) MatchContext(ctx context.Context, input Input) *Result {
 	}
 
 	// 8. No match → per-file fallback for multi-file torrents
-	if len(input.Filenames) > 1 && m.isCollection(input.TorrentFolder, input.Filenames, input.RDType) {
+	if len(input.Filenames) > 1 {
 		return m.perFileMatch(ctx, input, input.Filenames)
 	}
 
@@ -118,6 +118,9 @@ func (m *Matcher) perFileMatch(ctx context.Context, input Input, filenames []str
 
 // tryHint extracts {tmdb-N}/{imdb-ttN} and does direct lookup.
 func (m *Matcher) tryHint(ctx context.Context, folder, original string) *tmdb.MatchResult {
+	if m.tmdb == nil {
+		return nil
+	}
 	for _, s := range []string{folder, original} {
 		if ctx.Err() != nil {
 			return nil

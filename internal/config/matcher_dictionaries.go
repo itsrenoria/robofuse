@@ -48,8 +48,8 @@ func (c *Config) loadMatcherDictionaries() error {
 
 	c.MatcherDictionaryDir = dir
 	c.Matching.NoiseTokens = loaded.NoiseTokens
-	c.Matching.TitleAliases = loaded.TitleAliases
-	c.Matching.TransliterationAliases = loaded.TransliterationAliases
+	c.Matching.TitleAliases = mergeStringMap(c.Matching.TitleAliases, loaded.TitleAliases)
+	c.Matching.TransliterationAliases = mergeStringMap(c.Matching.TransliterationAliases, loaded.TransliterationAliases)
 	c.Matching.AnimeKeywords = mergeStrings(c.Matching.AnimeKeywords, loaded.AnimeKeywords)
 	c.Matching.CollectionKeywords = mergeStrings(c.Matching.CollectionKeywords, loaded.CollectionKeywords)
 	c.Matching.TitleOverrides = mergeStringMap(c.Matching.TitleAliases, c.Matching.TitleOverrides)
