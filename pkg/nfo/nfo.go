@@ -70,7 +70,7 @@ type Data struct {
 //
 //	".../Movie (2024).nfo"
 func Write(strmPath string, data *Data) error {
-	if strings.TrimSpace(strmPath) == "" {
+	if strmPath == "" {
 		return fmt.Errorf("strmPath is empty")
 	}
 	if data == nil {
@@ -87,25 +87,21 @@ func Write(strmPath string, data *Data) error {
 		return err
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(nfoPath), ".nfo-*.tmp")
+	tmpFile, err := os.CreateTemp(filepath.Dir(nfoPath), ".nfo-*")
 	if err != nil {
 		return err
 	}
-	if _, err := tmp.Write(xmlContent); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(xmlContent); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), nfoPath)
+	return os.Rename(tmpPath, nfoPath)
 }
 
 // strmPathToNFOPath replaces the .strm extension with .nfo.

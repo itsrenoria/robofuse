@@ -10,10 +10,16 @@ type Config struct {
 	TransliterationAliases map[string][]string
 	AnimeKeywords          []string
 	CollectionKeywords     []string
+	SeasonMarkerWords      []string
+	EpisodeRangePatterns   []string
+	QualityTailTokens      []string
 	ForceMoviePatterns     []*regexp.Regexp
+	Languages              []string // TMDB search language priority (e.g. ["en","ru"])
 	MinScore               int
 	MinScoreNoYear         int
 	MinMargin              int
+	SeasonMarkerRE         *regexp.Regexp
+	QualityTailRE          *regexp.Regexp
 }
 
 // DefaultConfig returns sensible defaults.
@@ -27,6 +33,7 @@ func DefaultConfig() *Config {
 		`\bEZTVx?\b`, `\bTGx\b`, `\bGalaxyTV\b`,
 		`\bNNMClub\b`, `\bRutracker\b`,
 		`\b(AMZN|NF|DSNP|HMAX|ATVP|PMTP)\b`,
+		`www\.\S+\.\S+\s*[-–—]\s*`,
 	}
 	forceMoviePatterns := []string{`^\d+\.`}
 
@@ -43,10 +50,13 @@ func DefaultConfig() *Config {
 	cfg := &Config{
 		StripPatterns:      compiled(stripPatterns),
 		ForceMoviePatterns: compiled(forceMoviePatterns),
-		MinScore:           88,
-		MinScoreNoYear:     94,
+		Languages:          []string{"en"},
+		MinScore:           75,
+		MinScoreNoYear:     80,
 		MinMargin:          6,
 	}
 	_ = cfg.ApplyDictionaries(DefaultDictionaries())
+	cfg.SeasonMarkerRE = BuildSeasonEpisodeRE(cfg.SeasonMarkerWords, cfg.EpisodeRangePatterns)
+	cfg.QualityTailRE = BuildQualityTailRE(cfg.QualityTailTokens)
 	return cfg
 }

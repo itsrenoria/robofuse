@@ -2,13 +2,14 @@ package namefmt
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
 
 // namefmt.go — configurable filename formatting with metadata placeholders.
 
-// Values holds all available metadata for filename templates.
+// Values holds all available metadata for filename and folder templates.
 type Values struct {
 	Title         string   // show/movie title
 	OriginalTitle string   // original language title
@@ -30,11 +31,11 @@ type Values struct {
 const DefaultMovie = "{title} ({year})"
 
 // DefaultEpisode is the fallback template for TV episodes.
-const DefaultEpisode = "{title} S{season:02d}E{episode:02d}"
+const DefaultEpisode = "{title} {episode_name}"
 
-// Format applies a template string to values and returns the formatted filename.
+// Format applies a template string to values and returns the formatted name.
 // Placeholders: {title}, {year}, {season}, {episode}, {episode_title},
-// {resolution}, {hdr}, {bitrate}, {codec}, {audio_codec},
+// {episode_id}, {episode_name}, {resolution}, {hdr}, {bitrate}, {codec}, {audio_codec},
 // {audio_langs}, {sub_langs}, {extension}, {original_title}
 // Numeric fields support Go format verbs: {season:02d}, {episode:02d}, {year:04d}
 func Format(tmpl string, v Values) string {
@@ -45,11 +46,16 @@ func Format(tmpl string, v Values) string {
 }
 
 func expand(tmpl string, v Values) string {
+	episodeID := EpisodeID(v.Season, v.Episode)
+	episodeName := EpisodeName(v.Season, v.Episode, v.EpisodeTitle)
+
 	// Replace simple placeholders
 	repl := map[string]string{
 		"{title}":          v.Title,
 		"{original_title}": v.OriginalTitle,
 		"{episode_title}":  v.EpisodeTitle,
+		"{episode_id}":     episodeID,
+		"{episode_name}":   episodeName,
 		"{resolution}":     v.Resolution,
 		"{hdr}":            v.HDR,
 		"{bitrate}":        v.Bitrate,
@@ -80,19 +86,158 @@ var formatVerbRE = regexp.MustCompile(`\{(\w+):(\d+d)\}`)
 var emptyBracketRE = regexp.MustCompile(`\[[\s,;._-]*\]`)
 var emptyParenRE = regexp.MustCompile(`\([\s,;._-]*\)`)
 var multiSpaceRE = regexp.MustCompile(`\s{2,}`)
+var episodeTitleMarkerRE = regexp.MustCompile(`(?i)(?:^|[\s._-])(?:s\d{1,2}[\s._-]*e\d{1,3}|\d{1,2}x\d{1,3})(?:[\s._-]+|\b)(.*)$`)
+
+var episodeTitleStopTokens = map[string]struct{}{
+	"720p": {}, "1080p": {}, "2160p": {}, "4320p": {},
+	"web": {}, "web-dl": {}, "webrip": {}, "bluray": {}, "bdrip": {}, "brrip": {},
+	"hdtv": {}, "hdrip": {}, "dvdrip": {}, "remux": {},
+	"nf": {}, "amzn": {}, "dsnp": {}, "hmax": {}, "atvp": {}, "hulu": {},
+	"hdr": {}, "hdr10": {}, "dv": {}, "dovi": {},
+	"x264": {}, "x265": {}, "h264": {}, "h265": {}, "hevc": {}, "avc": {}, "av1": {},
+	"aac": {}, "ddp": {}, "dd": {}, "dts": {}, "atmos": {},
+	"proper": {}, "repack": {}, "internal": {},
+}
+
+var animeExtraCompactTokenRE = regexp.MustCompile(`(?i)^(ncop|nced|pv|cm|ova|oad|ona|sp|special|preview|trailer|teaser)(\d{1,2})$`)
 
 func expandFormatVerb(s, field string, val int) string {
-	return formatVerbRE.ReplaceAllStringFunc(s, func(match string) string {
+	re := regexp.MustCompile(fmt.Sprintf(`\{%s:(\d+d)\}`, field))
+	return re.ReplaceAllStringFunc(s, func(match string) string {
 		parts := formatVerbRE.FindStringSubmatch(match)
 		if len(parts) != 3 {
-			return match
-		}
-		if parts[1] != field {
 			return match
 		}
 		verb := parts[2]
 		return fmt.Sprintf("%"+verb, val)
 	})
+}
+
+// EpisodeID returns a stable episode identifier for naming.
+// Examples: S01E02, E1093, S01.
+func EpisodeID(season, episode int) string {
+	switch {
+	case season > 0 && episode > 0:
+		return fmt.Sprintf("S%02dE%02d", season, episode)
+	case episode > 0:
+		return fmt.Sprintf("E%d", episode)
+	case season > 0:
+		return fmt.Sprintf("S%02d", season)
+	default:
+		return ""
+	}
+}
+
+// EpisodeName prefers numeric identity when available and falls back to title-like labels.
+func EpisodeName(season, episode int, episodeTitle string) string {
+	if id := EpisodeID(season, episode); id != "" {
+		return id
+	}
+	return strings.TrimSpace(episodeTitle)
+}
+
+// EpisodeTitleFromFilename extracts a likely episode title after an episode marker.
+// Example: "Show.S01E02.The.Title.1080p.mkv" returns "The Title".
+func EpisodeTitleFromFilename(filename string) string {
+	base := filepath.Base(filename)
+	if strings.HasSuffix(strings.ToLower(base), ".strm") {
+		base = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	match := episodeTitleMarkerRE.FindStringSubmatch(base)
+	if len(match) != 2 {
+		return detectAnimeExtraLabel(base)
+	}
+
+	rest := strings.NewReplacer(".", " ", "_", " ").Replace(match[1])
+	fields := strings.Fields(rest)
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		token := strings.Trim(field, "[](){}")
+		if _, stop := episodeTitleStopTokens[strings.ToLower(token)]; stop {
+			break
+		}
+		out = append(out, field)
+	}
+	title := strings.TrimSpace(strings.Join(out, " "))
+	title = strings.Trim(title, " -_[](){}")
+	if title == "" || len([]rune(title)) < 2 {
+		return detectAnimeExtraLabel(base)
+	}
+	return Clean(title)
+}
+
+func detectAnimeExtraLabel(base string) string {
+	normalized := strings.NewReplacer(
+		".", " ",
+		"_", " ",
+		"-", " ",
+		"[", " ",
+		"]", " ",
+		"(", " ",
+		")", " ",
+	).Replace(base)
+	fields := strings.Fields(normalized)
+	for i, field := range fields {
+		token := strings.Trim(field, "[](){}")
+		if token == "" {
+			continue
+		}
+		if label, ok := canonicalAnimeExtraToken(token); ok {
+			if i+1 < len(fields) && isSmallOrdinal(fields[i+1]) && !strings.Contains(label, " ") {
+				return label + " " + fields[i+1]
+			}
+			return label
+		}
+	}
+	return ""
+}
+
+func canonicalAnimeExtraToken(token string) (string, bool) {
+	upper := strings.ToUpper(strings.TrimSpace(token))
+	if match := animeExtraCompactTokenRE.FindStringSubmatch(upper); len(match) == 3 {
+		label := canonicalAnimeExtraWord(match[1])
+		if match[2] != "" {
+			return label + " " + match[2], true
+		}
+		return label, true
+	}
+	switch upper {
+	case "NCOP", "NCED", "PV", "CM", "OVA", "OAD", "ONA":
+		return upper, true
+	case "SP", "SPECIAL", "SPECIALS", "PREVIEW", "TRAILER", "TEASER":
+		return canonicalAnimeExtraWord(upper), true
+	default:
+		return "", false
+	}
+}
+
+func canonicalAnimeExtraWord(token string) string {
+	switch strings.ToUpper(token) {
+	case "SP", "SPECIAL", "SPECIALS":
+		return "Special"
+	case "PREVIEW":
+		return "Preview"
+	case "TRAILER":
+		return "Trailer"
+	case "TEASER":
+		return "Teaser"
+	default:
+		return strings.ToUpper(token)
+	}
+}
+
+func isSmallOrdinal(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(token) <= 2
 }
 
 // BitrateMbps formats a bitrate value into a human-readable string like "17 Mbps".
@@ -130,12 +275,12 @@ func HDRLabel(hdr string) string {
 		return ""
 	}
 	switch strings.ToUpper(hdr) {
+	case "HEVC", "H265":
+		return "HDR" // generic HDR for HEVC
 	case "DV", "DOLBYVISION":
 		return "Dolby Vision"
-	case "HDR10":
-		return "HDR10"
-	case "HDR10PLUS", "HDR10+":
-		return "HDR10+"
+	case "HDR10", "HDR10PLUS":
+		return hdr
 	default:
 		return hdr
 	}

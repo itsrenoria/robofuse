@@ -3,7 +3,6 @@ package probe
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -93,39 +92,36 @@ func Probe(ctx context.Context, url string, timeout time.Duration, ffprobePath s
 
 	// Check that ffprobe exists
 	if _, err := exec.LookPath(ffprobePath); err != nil {
-		logger.Warn().Str("path", ffprobePath).Err(err).Msg("ffprobe not found")
-		return nil, nil
+		return nil, fmt.Errorf("ffprobe not found at %q: %w", ffprobePath, err)
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// -v quiet: suppress banner and debug
+	// -print_format json: machine-parseable output
+	// -show_format -show_streams: include both format and per-stream metadata
 	cmd := exec.CommandContext(probeCtx, ffprobePath,
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
-		"--",
+		"--",     // prevent flag injection
 		url,
 	)
 
 	output, err := cmd.Output()
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, fmt.Errorf("ffprobe cancelled: %w", err)
-		}
+		// Distinguish timeout from other failures
 		if probeCtx.Err() == context.DeadlineExceeded {
-			logger.Warn().Str("url", url).Dur("timeout", timeout).Msg("ffprobe timed out")
-		} else {
-			logger.Warn().Err(err).Str("url", url).Msg("ffprobe failed")
+			return nil, fmt.Errorf("ffprobe timed out after %s: %w", timeout, err)
 		}
-		return nil, nil
+		return nil, fmt.Errorf("ffprobe failed: %w", err)
 	}
 
 	var raw ffprobeOutput
 	if err := json.Unmarshal(output, &raw); err != nil {
-		logger.Warn().Err(err).Str("url", url).Msg("parsing ffprobe output failed")
-		return nil, nil
+		return nil, fmt.Errorf("parsing ffprobe output: %w", err)
 	}
 
 	info := &MediaInfo{
@@ -221,9 +217,19 @@ func parseFrameRate(rate string) string {
 
 // detectHDR returns an HDR label for known HDR codec suffixes.
 func detectHDR(codec string) string {
-	// TODO: Parse side data (color_transfer, mastering_display, content_light_level)
-	// to detect actual HDR. Codec family alone (HEVC/AV1/VP9) is not proof of HDR.
-	return ""
+	upper := strings.ToUpper(codec)
+	switch {
+	case strings.Contains(upper, "HEVC") || strings.Contains(upper, "H265"):
+		// Main 10 profile is common for HDR; we can't detect the actual
+		// transfer function without parsing side data. Return a hint.
+		return "HEVC" // caller can infer possible HDR10/HLG/DV
+	case strings.Contains(upper, "AV1"):
+		return "AV1"
+	case strings.Contains(upper, "VP9"):
+		return "VP9"
+	default:
+		return ""
+	}
 }
 
 // formatDuration converts a duration in seconds to a human-readable string.

@@ -1,6 +1,17 @@
 package strm
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/robofuse/robofuse/internal/config"
+	"github.com/robofuse/robofuse/internal/logger"
+	"github.com/robofuse/robofuse/pkg/realdebrid"
+	"github.com/robofuse/robofuse/pkg/tmdb"
+	"github.com/robofuse/robofuse/pkg/tracking"
+)
 
 func TestParseSTRMContent(t *testing.T) {
 	tests := []struct {
@@ -64,5 +75,106 @@ func TestSanitizeFilename(t *testing.T) {
 				t.Errorf("sanitizeFilename(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWriteNFOPrefersStoredEpisodeIdentity(t *testing.T) {
+	dir := t.TempDir()
+	trackingFile := filepath.Join(dir, "tracking.json")
+	cfg := &config.Config{TrackingFile: trackingFile}
+	svc := &Service{
+		config:   cfg,
+		logger:   logger.New("test"),
+		tracking: tracking.New(trackingFile),
+	}
+
+	stableKey := "miami-vice-s01e02"
+	svc.tracking.SetTMDBMatch(stableKey, &tmdb.MatchResult{
+		TMDBID:        1908,
+		Title:         "Miami Vice",
+		OriginalTitle: "Miami Vice",
+		Type:          "show",
+		Year:          1984,
+	})
+	svc.tracking.SetEpisodeIdentity(stableKey, 1, 2, "Heart Of Darkness", "rd")
+
+	writePath := filepath.Join("Series", "Miami Vice (1984)", "Season 01", "02 Heart Of Darkness.mkv.strm")
+	candidate := realdebrid.STRMCandidate{
+		Filename:      "02 Heart Of Darkness.mkv.strm",
+		TorrentFolder: "Сезон 1 (1984-1985)",
+		Filesize:      1234,
+	}
+	if err := svc.writeNFO(dir, writePath, stableKey, candidate); err != nil {
+		t.Fatalf("writeNFO() error = %v", err)
+	}
+
+	nfoPath := filepath.Join(dir, strings.TrimSuffix(writePath, ".strm")+".nfo")
+	content, err := os.ReadFile(nfoPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", nfoPath, err)
+	}
+
+	got := string(content)
+	for _, want := range []string{
+		"<showtitle>Miami Vice</showtitle>",
+		"<title>Heart Of Darkness</title>",
+		"<season>1</season>",
+		"<episode>2</episode>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("NFO missing %q\n%s", want, got)
+		}
+	}
+}
+
+func TestWriteNFOMovieUsesSelectedTitleAndCanonicalOriginalTitle(t *testing.T) {
+	dir := t.TempDir()
+	trackingFile := filepath.Join(dir, "tracking.json")
+	cfg := &config.Config{TrackingFile: trackingFile}
+	svc := &Service{
+		config:   cfg,
+		logger:   logger.New("test"),
+		tracking: tracking.New(trackingFile),
+	}
+
+	stableKey := "brat-1997"
+	svc.tracking.SetTMDBMatch(stableKey, &tmdb.MatchResult{
+		TMDBID:                   600,
+		Title:                    "Брат",
+		OriginalTitle:            "Brat",
+		Type:                     "movie",
+		Year:                     1997,
+		Overview:                 "Фильм о Даниле Багрове.",
+		Genres:                   []string{"Криминал", "Драма"},
+		SelectedMetadataLanguage: "ru-RU",
+		OriginalLanguage:         "ru",
+	})
+
+	writePath := filepath.Join("Movies", "Брат (1997)", "Brat.1997.mkv.strm")
+	candidate := realdebrid.STRMCandidate{
+		Filename:      "Brat.1997.mkv.strm",
+		TorrentFolder: "Brat.1997",
+		Filesize:      1234,
+	}
+	if err := svc.writeNFO(dir, writePath, stableKey, candidate); err != nil {
+		t.Fatalf("writeNFO() error = %v", err)
+	}
+
+	nfoPath := filepath.Join(dir, strings.TrimSuffix(writePath, ".strm")+".nfo")
+	content, err := os.ReadFile(nfoPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", nfoPath, err)
+	}
+
+	got := string(content)
+	for _, want := range []string{
+		"<title>Брат</title>",
+		"<originaltitle>Brat</originaltitle>",
+		"<plot>Фильм о Даниле Багрове.</plot>",
+		"<genre>Криминал</genre>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("NFO missing %q\n%s", want, got)
+		}
 	}
 }

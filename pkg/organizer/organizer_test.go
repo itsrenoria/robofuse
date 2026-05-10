@@ -112,6 +112,19 @@ func TestCalculateContentPath_EdgeCases(t *testing.T) {
 			wantType:     "anime",
 			wantContains: []string{"Animation"},
 		},
+		{
+			name: "tmdb anime movie routes to anime",
+			opts: ContentPathOptions{
+				Filename:    "Akira.1988.mkv.strm",
+				TMDBTitle:   "Akira",
+				TMDBYear:    1988,
+				TMDBType:    "movie",
+				TMDBIsAnime: true,
+			},
+			wantType:     "anime",
+			wantContains: []string{"Anime", "Akira (1988)"},
+			notContains:  []string{"Season 00", "Season Unknown"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -143,7 +156,7 @@ func TestCalculateContentPath_FolderRuleSkipTMDB(t *testing.T) {
 		TMDBYear:      2023,
 		TMDBType:      "movie",
 		FolderRules: []FolderRule{
-			{Pattern: "rule-folder", Target: "CustomTarget", SkipTMDB: true, Adult: true},
+			{Pattern: "rule-folder", Target: "CustomTarget", SkipTMDB: true},
 		},
 	}
 	contentType, destRelPath := CalculateContentPath(opts)
@@ -170,6 +183,97 @@ func TestCalculateContentPath_SeasonFromParentEpisodeFromFile(t *testing.T) {
 	}
 	if !strings.Contains(destRelPath, "E05") {
 		t.Errorf("expected E05 from filename, got %q", destRelPath)
+	}
+}
+
+func TestCalculateContentPath_UsesStoredEpisodeIdentityForWeakSeasonFolder(t *testing.T) {
+	opts := ContentPathOptions{
+		Filename:      "02 Heart Of Darkness.mkv.strm",
+		TorrentFolder: "Сезон 1 (1984-1985)",
+		Category:      "series",
+		TMDBTitle:     "Miami Vice",
+		TMDBYear:      1984,
+		TMDBType:      "show",
+		EpisodeSeason: 1,
+		EpisodeNumber: 2,
+		EpisodeTitle:  "Heart Of Darkness",
+	}
+
+	contentType, destRelPath := CalculateContentPath(opts)
+	if contentType != "series" {
+		t.Fatalf("contentType = %q, want series", contentType)
+	}
+	if !strings.Contains(destRelPath, "Miami Vice (1984)") {
+		t.Fatalf("destRelPath = %q, want Miami Vice folder", destRelPath)
+	}
+	if !strings.Contains(destRelPath, "Season 01") {
+		t.Fatalf("destRelPath = %q, want Season 01", destRelPath)
+	}
+	if strings.Contains(destRelPath, "Unknown") {
+		t.Fatalf("destRelPath = %q, should not fall back to Unknown", destRelPath)
+	}
+}
+
+func TestCalculateContentPath_SeasonlessAnimeUsesSeriesRoot(t *testing.T) {
+	opts := ContentPathOptions{
+		Filename:      "[SubsPlease] One Piece - 1093 (1080p).mkv.strm",
+		TorrentFolder: "[SubsPlease] One Piece",
+		Category:      "anime",
+		TMDBTitle:     "One Piece",
+		TMDBType:      "show",
+		EpisodeNumber: 1093,
+	}
+
+	contentType, destRelPath := CalculateContentPath(opts)
+	if contentType != "anime" {
+		t.Fatalf("contentType = %q, want anime", contentType)
+	}
+	want := filepath.Join("Anime", "One Piece", "[SubsPlease] One Piece - 1093 (1080p).mkv.strm")
+	if destRelPath != want {
+		t.Fatalf("destRelPath = %q, want %q", destRelPath, want)
+	}
+	if strings.Contains(destRelPath, "Season ") {
+		t.Fatalf("destRelPath = %q, should not invent a season folder", destRelPath)
+	}
+}
+
+func TestCalculateContentPath_AnimeExtraRoutesToExtras(t *testing.T) {
+	opts := ContentPathOptions{
+		Filename:      "[SubsPlease] Frieren - NCOP (1080p).mkv.strm",
+		TorrentFolder: "[SubsPlease] Frieren",
+		Category:      "anime",
+		TMDBTitle:     "Frieren: Beyond Journey's End",
+		TMDBYear:      2023,
+		TMDBType:      "show",
+	}
+
+	contentType, destRelPath := CalculateContentPath(opts)
+	if contentType != "anime" {
+		t.Fatalf("contentType = %q, want anime", contentType)
+	}
+	want := filepath.Join("Anime", "Frieren Beyond Journey's End (2023)", "Extras", "[SubsPlease] Frieren - NCOP (1080p).mkv.strm")
+	if destRelPath != want {
+		t.Fatalf("destRelPath = %q, want %q", destRelPath, want)
+	}
+}
+
+func TestCalculateContentPath_AnimeSpecialRoutesToSpecials(t *testing.T) {
+	opts := ContentPathOptions{
+		Filename:      "[SubsPlease] Frieren - Special 1 (1080p).mkv.strm",
+		TorrentFolder: "[SubsPlease] Frieren",
+		Category:      "anime",
+		TMDBTitle:     "Frieren: Beyond Journey's End",
+		TMDBYear:      2023,
+		TMDBType:      "show",
+	}
+
+	contentType, destRelPath := CalculateContentPath(opts)
+	if contentType != "anime" {
+		t.Fatalf("contentType = %q, want anime", contentType)
+	}
+	want := filepath.Join("Anime", "Frieren Beyond Journey's End (2023)", "Specials", "[SubsPlease] Frieren - Special 1 (1080p).mkv.strm")
+	if destRelPath != want {
+		t.Fatalf("destRelPath = %q, want %q", destRelPath, want)
 	}
 }
 
@@ -235,6 +339,49 @@ func TestCalculateContentPath_UnmatchedRoutesToUnmatched(t *testing.T) {
 		t.Fatalf("contentType = %q, want unmatched", contentType)
 	}
 	want := filepath.Join("unmatched", "unparseable-pack", "weird.release.1080p [abc123].mkv.strm")
+	if destRelPath != want {
+		t.Fatalf("destRelPath = %q, want %q", destRelPath, want)
+	}
+}
+
+func TestCalculateContentPath_FolderTemplates(t *testing.T) {
+	opts := ContentPathOptions{
+		Filename:             "Show.S01E02.The.Title.1080p.mkv.strm",
+		TorrentFolder:        "Show.S01.1080p",
+		TMDBTitle:            "Localized Show",
+		TMDBOriginalTitle:    "Original Show",
+		TMDBYear:             2024,
+		TMDBType:             "show",
+		EpisodeTitle:         "The Title",
+		SeriesFolderTemplate: "{original_title} ({year})",
+		SeasonFolderTemplate: "S{season:02d}",
+	}
+
+	contentType, destRelPath := CalculateContentPath(opts)
+	if contentType != "series" {
+		t.Fatalf("contentType = %q, want series", contentType)
+	}
+	want := filepath.Join("Series", "Original Show (2024)", "S01", "Show.S01E02.The.Title.1080p.mkv.strm")
+	if destRelPath != want {
+		t.Fatalf("destRelPath = %q, want %q", destRelPath, want)
+	}
+}
+
+func TestCalculateContentPath_MovieFolderTemplate(t *testing.T) {
+	opts := ContentPathOptions{
+		Filename:            "Movie.2024.mkv.strm",
+		TMDBTitle:           "Localized Movie",
+		TMDBOriginalTitle:   "Original Movie",
+		TMDBYear:            2024,
+		TMDBType:            "movie",
+		MovieFolderTemplate: "{original_title} ({year})",
+	}
+
+	contentType, destRelPath := CalculateContentPath(opts)
+	if contentType != "movie" {
+		t.Fatalf("contentType = %q, want movie", contentType)
+	}
+	want := filepath.Join("Movies", "Original Movie (2024)", "Movie.2024.mkv.strm")
 	if destRelPath != want {
 		t.Fatalf("destRelPath = %q, want %q", destRelPath, want)
 	}

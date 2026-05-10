@@ -3,7 +3,7 @@ package matcher
 import "regexp"
 
 // tmdbHintRE extracts {tmdb-N} and {imdb-ttN} hints from folder names.
-var tmdbHintRE = regexp.MustCompile(`(?i)\{tmdb[-\s]*(\d+)\}|\{imdb[-\s]*(tt\d+)\}`)
+var tmdbHintRE = regexp.MustCompile(`\{tmdb[-\s]*(\d+)\}|\{imdb[-\s]*(tt\d+)\}`)
 
 func extractHint(s string) (hintType, id string) {
 	matches := tmdbHintRE.FindStringSubmatch(s)

@@ -29,38 +29,50 @@ type FileTracking struct {
 	Media        *probe.MediaInfo `json:"media,omitempty"` // ffprobe metadata (may be nil)
 
 	// RD media info (from /streaming/mediaInfos/{id})
-	RDType         string  `json:"rd_type,omitempty"`          // "movie", "show", "audio"
-	RDSeason       int     `json:"rd_season,omitempty"`
-	RDEpisode      int     `json:"rd_episode,omitempty"`
-	RDYear         string  `json:"rd_year,omitempty"`
-	RDDuration     float64 `json:"rd_duration,omitempty"`      // seconds
-	RDBitrate      int     `json:"rd_bitrate,omitempty"`
-	RDPosterPath   string  `json:"rd_poster_path,omitempty"`   // poster image URL
-	RDBackdropPath string  `json:"rd_backdrop_path,omitempty"` // backdrop image URL
-	RDMediaFailed   bool      `json:"rd_media_failed,omitempty"`   // true if mediaInfos returned 503
+	RDType          string    `json:"rd_type,omitempty"` // "movie", "show", "audio"
+	RDSeason        int       `json:"rd_season,omitempty"`
+	RDEpisode       int       `json:"rd_episode,omitempty"`
+	RDYear          string    `json:"rd_year,omitempty"`
+	RDDuration      float64   `json:"rd_duration,omitempty"` // seconds
+	RDBitrate       int       `json:"rd_bitrate,omitempty"`
+	RDPosterPath    string    `json:"rd_poster_path,omitempty"`     // poster image URL
+	RDBackdropPath  string    `json:"rd_backdrop_path,omitempty"`   // backdrop image URL
+	RDMediaFailed   bool      `json:"rd_media_failed,omitempty"`    // true if mediaInfos returned 503
 	RDMediaFailedAt time.Time `json:"rd_media_failed_at,omitempty"` // when RDMediaFailed was last set
 
 	ProbeAttempts int `json:"probe_attempts,omitempty"` // number of failed probe attempts
 
 	// TMDB match (from themoviedb.org)
-	TMDBID        int      `json:"tmdb_id,omitempty"`
-	TMDBTitle     string   `json:"tmdb_title,omitempty"`       // official title
-	TMDBOriginalTitle string `json:"tmdb_original_title,omitempty"` // original language title
-	TMDBType      string   `json:"tmdb_type,omitempty"`        // "movie" or "show"
-	TMDBYear      int      `json:"tmdb_year,omitempty"`
-	TMDBOverview  string   `json:"tmdb_overview,omitempty"`
-	TMDBPoster    string   `json:"tmdb_poster,omitempty"`
-	TMDBBackdrop  string   `json:"tmdb_backdrop,omitempty"`
-	TMDBRating    float64  `json:"tmdb_rating,omitempty"`
-	TMDBGenres    []string `json:"tmdb_genres,omitempty"`
-	TMDBContentRating string `json:"tmdb_content_rating,omitempty"` // US certification (G, PG, TV-Y, etc.)
-	IMDBID        string   `json:"imdb_id,omitempty"`        // IMDB ID (movies only)
-	TMDBNFOGenerated bool  `json:"tmdb_nfo_generated,omitempty"`
+	TMDBID               int                             `json:"tmdb_id,omitempty"`
+	TMDBTitle            string                          `json:"tmdb_title,omitempty"`          // official title
+	TMDBOriginalTitle    string                          `json:"tmdb_original_title,omitempty"` // original language title
+	TMDBType             string                          `json:"tmdb_type,omitempty"`           // "movie" or "show"
+	TMDBYear             int                             `json:"tmdb_year,omitempty"`
+	TMDBOverview         string                          `json:"tmdb_overview,omitempty"`
+	TMDBPoster           string                          `json:"tmdb_poster,omitempty"`
+	TMDBBackdrop         string                          `json:"tmdb_backdrop,omitempty"`
+	TMDBRating           float64                         `json:"tmdb_rating,omitempty"`
+	TMDBGenres           []string                        `json:"tmdb_genres,omitempty"`
+	TMDBSelectedLanguage string                          `json:"tmdb_selected_language,omitempty"`
+	TMDBOriginalLanguage string                          `json:"tmdb_original_language,omitempty"`
+	TMDBOriginCountries  []string                        `json:"tmdb_origin_countries,omitempty"`
+	TMDBMetadataVariants map[string]tmdb.MetadataVariant `json:"tmdb_metadata_variants,omitempty"`
+	TMDBContentRating    string                          `json:"tmdb_content_rating,omitempty"` // US certification (G, PG, TV-Y, etc.)
+	TMDBIsAnime          bool                            `json:"tmdb_is_anime,omitempty"`
+	IMDBID               string                          `json:"imdb_id,omitempty"` // IMDB ID (movies only)
+	TMDBNFOGenerated     bool                            `json:"tmdb_nfo_generated,omitempty"`
+
+	// Episode identity — stored once so organizer/NFO prefer it over reparsing
+	// weak torrent folders like "Season 1".
+	EpisodeSeason int    `json:"episode_season,omitempty"`
+	EpisodeNumber int    `json:"episode_number,omitempty"`
+	EpisodeTitle  string `json:"episode_title,omitempty"`
+	EpisodeSource string `json:"episode_source,omitempty"`
 
 	// Organized path — where the STRM file lives on disk in the organized directory
 	// (e.g. "Series/He-Man (1983)/Season 01/He-Man - S01E01.avi.strm")
 	// This is separate from RelativePath which is the stable tracking key.
-	OrganizedPath  string `json:"organized_path,omitempty"`
+	OrganizedPath string `json:"organized_path,omitempty"`
 
 	// Source tracking — original torrent folder and filename before any transformation
 	SourceFolder   string `json:"source_folder,omitempty"`
@@ -69,6 +81,13 @@ type FileTracking struct {
 	// Classification trail — how the media type was determined
 	// e.g. "ptt_episode+tmdb_show", "rd_movie", "folder_rule:adult"
 	Classification string `json:"classification,omitempty"`
+
+	// Match provenance — why the matcher made its decision.
+	TorrentShape    string `json:"torrent_shape,omitempty"`
+	MatchSource     string `json:"match_source,omitempty"`
+	MatchStrategy   string `json:"match_strategy,omitempty"`
+	MatchConfidence int    `json:"match_confidence,omitempty"`
+	MatchSearchTerm string `json:"match_search_term,omitempty"`
 
 	// Raw RD media info — full response from /streaming/mediaInfos/{id}
 	// Stored to avoid re-downloading; used alongside extracted fields (RDType, RDSeason, etc.)
@@ -304,6 +323,22 @@ func (s *Service) SetClassification(relativePath string, classification string) 
 	entry.Classification = classification
 }
 
+// SetMatchProvenance stores matcher decision metadata. Creates entry if it doesn't exist.
+func (s *Service) SetMatchProvenance(relativePath, torrentShape, source, strategy, searchTerm string, confidence int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, exists := s.data[relativePath]
+	if !exists {
+		entry = &FileTracking{RelativePath: relativePath, CreatedAt: time.Now(), LastChecked: time.Now()}
+		s.data[relativePath] = entry
+	}
+	entry.TorrentShape = torrentShape
+	entry.MatchSource = source
+	entry.MatchStrategy = strategy
+	entry.MatchConfidence = confidence
+	entry.MatchSearchTerm = searchTerm
+}
+
 // SetRDInfo stores Real-Debrid media info. Creates entry if it doesn't exist.
 func (s *Service) SetRDInfo(relativePath string, info *realdebrid.MediaInfoResult) {
 	if info == nil {
@@ -324,9 +359,42 @@ func (s *Service) SetRDInfo(relativePath string, info *realdebrid.MediaInfoResul
 	entry.RDDuration = info.Duration
 	entry.RDBitrate = info.Bitrate
 	entry.RDMediaFailed = false
-	entry.RDPosterPath = info.PosterPath
-	entry.RDBackdropPath = info.BackdropPath
+	if info.PosterPath != "" {
+		entry.RDPosterPath = info.PosterPath
+	}
+	if info.BackdropPath != "" {
+		entry.RDBackdropPath = info.BackdropPath
+	}
+	if entry.RDSeason > 0 {
+		entry.EpisodeSeason = entry.RDSeason
+		entry.EpisodeSource = "rd"
+	}
+	if entry.RDEpisode > 0 {
+		entry.EpisodeNumber = entry.RDEpisode
+		entry.EpisodeSource = "rd"
+	}
 	entry.RDMediaInfo = info
+}
+
+// SetEpisodeIdentity stores resolved episode numbering/title for a tracked file.
+// Values are written exactly as provided so each sync can refresh stale data.
+func (s *Service) SetEpisodeIdentity(relativePath string, season, episode int, title, source string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, exists := s.data[relativePath]
+	if !exists {
+		if season == 0 && episode == 0 && title == "" && source == "" {
+			return
+		}
+		entry = &FileTracking{RelativePath: relativePath, CreatedAt: time.Now(), LastChecked: time.Now()}
+		s.data[relativePath] = entry
+	}
+
+	entry.EpisodeSeason = season
+	entry.EpisodeNumber = episode
+	entry.EpisodeTitle = title
+	entry.EpisodeSource = source
 }
 
 // MarkRDMediaFailed marks a file's RD media info as permanently unavailable.
@@ -361,9 +429,31 @@ func (s *Service) SetTMDBMatch(relativePath string, match *tmdb.MatchResult) {
 	entry.TMDBPoster = match.PosterPath
 	entry.TMDBBackdrop = match.BackdropPath
 	entry.TMDBRating = match.VoteAverage
-	entry.TMDBGenres = match.Genres
+	entry.TMDBGenres = append([]string(nil), match.Genres...)
+	entry.TMDBSelectedLanguage = match.SelectedMetadataLanguage
+	entry.TMDBOriginalLanguage = match.OriginalLanguage
+	entry.TMDBOriginCountries = append([]string(nil), match.OriginCountries...)
+	entry.TMDBMetadataVariants = cloneMetadataVariants(match.MetadataVariants)
 	entry.TMDBContentRating = match.ContentRating
+	entry.TMDBIsAnime = match.IsAnime
 	entry.IMDBID = match.IMDBID
+}
+
+func cloneMetadataVariants(src map[string]tmdb.MetadataVariant) map[string]tmdb.MetadataVariant {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]tmdb.MetadataVariant, len(src))
+	for language, variant := range src {
+		out[language] = tmdb.MetadataVariant{
+			Title:        variant.Title,
+			Overview:     variant.Overview,
+			Genres:       append([]string(nil), variant.Genres...),
+			PosterPath:   variant.PosterPath,
+			BackdropPath: variant.BackdropPath,
+		}
+	}
+	return out
 }
 
 // Count returns the number of tracked files

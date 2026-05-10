@@ -365,18 +365,29 @@ func (s *Service) writeSTRMJSON(workDir, filePath, trackingKey, url, link, torre
 		if ft.Classification != "" {
 			meta["classification"] = ft.Classification
 		}
+		if ft.TorrentShape != "" {
+			meta["torrent_shape"] = ft.TorrentShape
+		}
+		if ft.MatchSource != "" {
+			meta["match_source"] = ft.MatchSource
+		}
+		if ft.MatchStrategy != "" {
+			meta["match_strategy"] = ft.MatchStrategy
+		}
+		if ft.MatchConfidence != 0 {
+			meta["match_confidence"] = ft.MatchConfidence
+		}
+		if ft.MatchSearchTerm != "" {
+			meta["match_search_term"] = ft.MatchSearchTerm
+		}
 		if ft.OrganizedPath != "" {
 			meta["organized_path"] = ft.OrganizedPath
 		}
 	}
-	metaJSON, err := json.Marshal(meta)
-	if err != nil {
-		content := []byte(urlLine + "\n")
-		return os.WriteFile(fullPath, content, 0600)
-	}
+	metaJSON, _ := json.Marshal(meta)
 
-	content := []byte(fmt.Sprintf("%s\n#robofuse:%s\n", urlLine, metaJSON))
-	return os.WriteFile(fullPath, content, 0600)
+	content := urlLine + "\n#robofuse:" + string(metaJSON) + "\n"
+	return os.WriteFile(fullPath, []byte(content), 0600)
 }
 
 // writeNFO creates a Kodi-compatible .nfo file alongside the .strm file.
@@ -404,7 +415,16 @@ func (s *Service) writeNFO(workDir, strmRelPath, stableKey string, candidate rea
 		rdType = ft.RDType
 		tmdbType = ft.TMDBType
 	}
-	cls := classify.Classify(candidate.Filename, candidate.TorrentFolder, rdType, tmdbType)
+	hints := classify.Hints{}
+	if hasTracking {
+		hints = classify.Hints{
+			Season:       ft.EpisodeSeason,
+			Episode:      ft.EpisodeNumber,
+			EpisodeTitle: ft.EpisodeTitle,
+			ShowTitle:    ft.TMDBTitle,
+		}
+	}
+	cls := classify.ClassifyWithHints(candidate.Filename, candidate.TorrentFolder, rdType, tmdbType, hints)
 
 	data.Type = cls.Type
 	data.Title = cls.Title
@@ -485,7 +505,12 @@ func (s *Service) refreshNFOWithMedia(workDir, strmRelPath, stableKey string, me
 	// Delegate to shared classifier (same as writeNFO)
 	fn := filepath.Base(strmRelPath)
 	parentFolder := filepath.Base(filepath.Dir(strmRelPath))
-	cls := classify.Classify(fn, parentFolder, ft.RDType, ft.TMDBType)
+	cls := classify.ClassifyWithHints(fn, parentFolder, ft.RDType, ft.TMDBType, classify.Hints{
+		Season:       ft.EpisodeSeason,
+		Episode:      ft.EpisodeNumber,
+		EpisodeTitle: ft.EpisodeTitle,
+		ShowTitle:    ft.TMDBTitle,
+	})
 
 	data := &nfo.Data{
 		Media:     media,
@@ -504,6 +529,7 @@ func (s *Service) refreshNFOWithMedia(workDir, strmRelPath, stableKey string, me
 		data.Rating = ft.TMDBRating
 		data.Genres = ft.TMDBGenres
 		data.IMDBID = ft.IMDBID
+		data.OriginalTitle = ft.TMDBOriginalTitle
 		if ft.TMDBTitle != "" {
 			if data.Type == "episode" {
 				data.ShowTitle = ft.TMDBTitle
@@ -606,7 +632,7 @@ func (s *Service) dispatchProbes(ctx context.Context, targets []probeTarget) {
 					Err(err).
 					Str("path", t.path).
 					Msg("ffprobe failed")
-				s.tracking.IncrementProbeAttempts(t.stableKey)
+				s.tracking.SetProbeAttempts(t.stableKey, s.config.ProbeMaxRetries)
 				return
 			}
 			if media == nil {
@@ -651,9 +677,19 @@ func (s *Service) SetClassification(relativePath string, classification string) 
 	s.tracking.SetClassification(relativePath, classification)
 }
 
+// SetMatchProvenance stores matcher decision metadata for a tracked file.
+func (s *Service) SetMatchProvenance(relativePath, torrentShape, source, strategy, searchTerm string, confidence int) {
+	s.tracking.SetMatchProvenance(relativePath, torrentShape, source, strategy, searchTerm, confidence)
+}
+
 // SetTMDBMatch stores TMDB match result for a tracked file.
 func (s *Service) SetTMDBMatch(relativePath string, match *tmdb.MatchResult) {
 	s.tracking.SetTMDBMatch(relativePath, match)
+}
+
+// SetEpisodeIdentity stores resolved episode numbering/title for a tracked file.
+func (s *Service) SetEpisodeIdentity(relativePath string, season, episode int, title, source string) {
+	s.tracking.SetEpisodeIdentity(relativePath, season, episode, title, source)
 }
 
 // SetOrganizedInfo stores organized path and source info for a tracked file.

@@ -79,7 +79,7 @@ func New(cfg *config.Config) *Client {
 		request.WithRateLimiter(generalRL),
 		request.WithLogger(log),
 		request.WithMaxRetries(0),
-		request.WithTimeout(10 * time.Second),
+		request.WithTimeout(10*time.Second),
 	)
 
 	return &Client{

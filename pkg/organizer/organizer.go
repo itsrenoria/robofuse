@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	ptt "github.com/itsrenoria/ptt-go"
+	"github.com/robofuse/robofuse/pkg/namefmt"
 )
 
 var parserPool = sync.Pool{
@@ -20,12 +21,6 @@ var parserPool = sync.Pool{
 		ptt.AddDefaults(p)
 		return p
 	},
-}
-
-var animeKeywords = []string{
-	"subsplease", "erai-raws", "judas", "ember", "asw",
-	"dkb", "nep_blanc", "lostyears", "akihitosubs",
-	"dual audio", "dual-audio",
 }
 
 // organizer.go handles parsing and output path construction for media items.
@@ -39,9 +34,13 @@ type ContentPathOptions struct {
 
 	// TMDB enrichment (may be empty if not matched)
 	TMDBTitle         string
+	TMDBOriginalTitle string
 	TMDBYear          int
 	TMDBType          string // "movie" or "show"
 	TMDBContentRating string
+	EpisodeSeason     int
+	EpisodeNumber     int
+	EpisodeTitle      string
 
 	// Routing rules
 	AdultPatterns []string
@@ -51,6 +50,11 @@ type ContentPathOptions struct {
 	AnimeFolder   string
 	MovieFolder   string
 	SeriesFolder  string
+
+	// Folder templates
+	MovieFolderTemplate  string
+	SeriesFolderTemplate string
+	SeasonFolderTemplate string
 
 	// Pre-determined classification
 	Category    string // pre-determined category from categorizeTorrent
@@ -65,9 +69,6 @@ type FolderRule struct {
 	Pattern  string
 	Target   string
 	SkipTMDB bool
-	Adult    bool
-
-	Compiled *regexp.Regexp
 }
 
 // ExistingFolderOptions holds inputs for FindExistingSeriesFolder.
@@ -91,11 +92,6 @@ func hasAnimeKeyword(names ...string) bool {
 		if strings.Contains(lower, "anime") {
 			return true
 		}
-		for _, kw := range animeKeywords {
-			if strings.Contains(lower, kw) {
-				return true
-			}
-		}
 	}
 	return false
 }
@@ -111,6 +107,67 @@ func safeFolderName(name string) string {
 		return "Unknown"
 	}
 	return name
+}
+
+func folderTemplateValues(title, originalTitle string, year int, season, episode []int, episodeTitle, extension string) namefmt.Values {
+	v := namefmt.Values{
+		Title:         title,
+		OriginalTitle: originalTitle,
+		Year:          year,
+		EpisodeTitle:  episodeTitle,
+		Extension:     extension,
+	}
+	if len(season) > 0 {
+		v.Season = season[0]
+	}
+	if len(episode) > 0 {
+		v.Episode = episode[0]
+	}
+	return v
+}
+
+func formatFolderComponent(tmpl string, values namefmt.Values) string {
+	if tmpl == "" {
+		return ""
+	}
+	folder := namefmt.Clean(namefmt.Format(tmpl, values))
+	return safeFolderName(folder)
+}
+
+func animeExtraFolder(filename, episodeTitle string) string {
+	title := strings.TrimSpace(episodeTitle)
+	if title == "" {
+		title = namefmt.EpisodeTitleFromFilename(filename)
+	}
+	if label, ok := canonicalAnimeExtraLabel(title); ok {
+		switch label {
+		case "Special":
+			return "Specials"
+		default:
+			return "Extras"
+		}
+	}
+	return ""
+}
+
+func canonicalAnimeExtraLabel(title string) (string, bool) {
+	token := strings.TrimSpace(title)
+	if token == "" {
+		return "", false
+	}
+	fields := strings.Fields(token)
+	if len(fields) == 0 {
+		return "", false
+	}
+	switch strings.ToUpper(fields[0]) {
+	case "NCOP", "NCED", "PV", "CM", "OVA", "OAD", "ONA":
+		return strings.ToUpper(fields[0]), true
+	case "SPECIAL", "PREVIEW", "TRAILER", "TEASER":
+		word := strings.ToLower(fields[0])
+		return strings.ToUpper(word[:1]) + word[1:], true
+	default:
+		return "", false
+	}
 }
 
 // FindExistingSeriesFolder looks for an existing series folder in the organized directory.
@@ -164,19 +221,13 @@ func isAdultPath(sourceRelPath string, adultPatterns []string, folderRules []Fol
 		}
 	}
 	for _, r := range folderRules {
-		if !r.Adult || r.Pattern == "" {
+		if r.Pattern == "" {
 			continue
 		}
 		if strings.HasPrefix(r.Pattern, "~") {
-			if r.Compiled != nil {
-				if r.Compiled.MatchString(filepath.Dir(sourceRelPath)) {
-					return true
-				}
-			} else {
-				re, err := regexp.Compile(r.Pattern[1:])
-				if err == nil && re.MatchString(filepath.Dir(sourceRelPath)) {
-					return true
-				}
+			re, err := regexp.Compile(r.Pattern[1:])
+			if err == nil && re.MatchString(filepath.Dir(sourceRelPath)) {
+				return true
 			}
 		} else if strings.Contains(folder, strings.ToLower(r.Pattern)) {
 			return true
@@ -191,19 +242,13 @@ func isAdultPath(sourceRelPath string, adultPatterns []string, folderRules []Fol
 		}
 	}
 	for _, r := range folderRules {
-		if !r.Adult || r.Pattern == "" {
+		if r.Pattern == "" {
 			continue
 		}
 		if strings.HasPrefix(r.Pattern, "~") {
-			if r.Compiled != nil {
-				if r.Compiled.MatchString(filepath.Base(sourceRelPath)) {
-					return true
-				}
-			} else {
-				re, err := regexp.Compile(r.Pattern[1:])
-				if err == nil && re.MatchString(filepath.Base(sourceRelPath)) {
-					return true
-				}
+			re, err := regexp.Compile(r.Pattern[1:])
+			if err == nil && re.MatchString(filepath.Base(sourceRelPath)) {
+				return true
 			}
 		} else if strings.Contains(filename, strings.ToLower(r.Pattern)) {
 			return true
@@ -222,23 +267,7 @@ func buildAdultPath(sourceRelPath, filename, rdID string, folderRules []FolderRu
 	target := "X"
 	folderLower := strings.ToLower(filepath.Dir(sourceRelPath))
 	for _, r := range folderRules {
-		if r.Pattern == "" {
-			continue
-		}
-		if strings.HasPrefix(r.Pattern, "~") {
-			if r.Compiled != nil {
-				if r.Compiled.MatchString(filepath.Dir(sourceRelPath)) {
-					target = r.Target
-					break
-				}
-			} else {
-				re, err := regexp.Compile(r.Pattern[1:])
-				if err == nil && re.MatchString(filepath.Dir(sourceRelPath)) {
-					target = r.Target
-					break
-				}
-			}
-		} else if strings.Contains(folderLower, strings.ToLower(r.Pattern)) {
+		if r.Pattern != "" && strings.Contains(folderLower, strings.ToLower(r.Pattern)) {
 			target = r.Target
 			break
 		}
@@ -249,7 +278,7 @@ func buildAdultPath(sourceRelPath, filename, rdID string, folderRules []FolderRu
 	if rdID != "" {
 		idSuffix = fmt.Sprintf(" [%s]", rdID)
 	}
-	baseName := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	baseName := mediaBaseName(filename)
 	cleanFile := cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
 
 	cleanTarget := safeFolderName(target)
@@ -303,13 +332,15 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 		pAnime = parentParsed.Anime
 	}
 
+	hasStoredEpisode := opts.EpisodeSeason > 0 || opts.EpisodeNumber > 0
+
 	// Determine if series (PTT provides base detection; category override refines type)
-	isSeriesFilename := len(fSeason) > 0 || len(fEpisode) > 0 || fAnime
+	isSeriesFilename := hasStoredEpisode || len(fSeason) > 0 || len(fEpisode) > 0 || fAnime
 	isSeriesParent := len(pSeason) > 0 || len(pEpisode) > 0 || pAnime
 
 	var finalType, title string
 	var year int
-	var season []int
+	var season, episode []int
 
 	if isSeriesParent {
 		finalType = "series"
@@ -326,10 +357,18 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 			year = fYear
 		}
 
-		if len(fSeason) > 0 {
+		if opts.EpisodeSeason > 0 {
+			season = []int{opts.EpisodeSeason}
+		} else if len(fSeason) > 0 {
 			season = fSeason
 		} else {
 			season = pSeason
+		}
+
+		if opts.EpisodeNumber > 0 {
+			episode = []int{opts.EpisodeNumber}
+		} else if len(fEpisode) > 0 {
+			episode = fEpisode
 		}
 	} else if isSeriesFilename {
 		finalType = "series"
@@ -339,7 +378,16 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 			title = "Unknown"
 		}
 		year = fYear
-		season = fSeason
+		if opts.EpisodeSeason > 0 {
+			season = []int{opts.EpisodeSeason}
+		} else {
+			season = fSeason
+		}
+		if opts.EpisodeNumber > 0 {
+			episode = []int{opts.EpisodeNumber}
+		} else {
+			episode = fEpisode
+		}
 	} else {
 		finalType = "movie"
 		if fTitle != "" {
@@ -370,7 +418,7 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 	}
 
 	if finalType == "unmatched" {
-		baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+		baseName := mediaBaseName(opts.Filename)
 		ext := realSTRMExt(opts.Filename)
 		idSuffix := ""
 		if opts.RDID != "" {
@@ -400,8 +448,8 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 		}
 	}
 
-	// TMDB anime override: if TMDB says anime, route to anime folder
-	if opts.TMDBIsAnime && finalType == "series" {
+	// TMDB anime override: if TMDB says anime, route to anime folder.
+	if opts.TMDBIsAnime {
 		finalType = "anime"
 	}
 
@@ -430,13 +478,14 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 			if opts.RDID != "" {
 				idSuffix = fmt.Sprintf(" [%s]", opts.RDID)
 			}
-			baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+			baseName := mediaBaseName(opts.Filename)
 			cleanFile := cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
 			return "kids", filepath.Join(baseFolder, cleanTitle, cleanFile)
 		}
 	}
 
 	// Determine base folder
+	animeMovie := opts.TMDBIsAnime && opts.TMDBType == "movie"
 	var baseFolder string
 	switch {
 	case finalType == "anime" && opts.AnimeFolder != "":
@@ -455,22 +504,36 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 		}
 	}
 
-	// Check for existing folder
-	existingFolder := FindExistingSeriesFolder(ExistingFolderOptions{
-		OrganizedDir: opts.OrganizedDir,
-		BaseFolder:   baseFolder,
-		Title:        title,
-		Year:         year,
-	})
+	ext := realSTRMExt(opts.Filename)
+	values := folderTemplateValues(title, opts.TMDBOriginalTitle, year, season, episode, opts.EpisodeTitle, ext)
+
 	var formattedTitle string
-	if existingFolder != "" {
-		formattedTitle = existingFolder
+	var titleFolderTemplate string
+	if finalType == "movie" || animeMovie {
+		titleFolderTemplate = opts.MovieFolderTemplate
 	} else {
-		formattedTitle = title
-		if year > 0 {
-			formattedTitle = fmt.Sprintf("%s (%d)", formattedTitle, year)
+		titleFolderTemplate = opts.SeriesFolderTemplate
+	}
+
+	if titleFolderTemplate != "" {
+		formattedTitle = formatFolderComponent(titleFolderTemplate, values)
+	} else {
+		// Check for existing folder
+		existingFolder := FindExistingSeriesFolder(ExistingFolderOptions{
+			OrganizedDir: opts.OrganizedDir,
+			BaseFolder:   baseFolder,
+			Title:        title,
+			Year:         year,
+		})
+		if existingFolder != "" {
+			formattedTitle = existingFolder
+		} else {
+			formattedTitle = title
+			if year > 0 {
+				formattedTitle = fmt.Sprintf("%s (%d)", formattedTitle, year)
+			}
+			formattedTitle = cleanFilename(formattedTitle)
 		}
-		formattedTitle = cleanFilename(formattedTitle)
 	}
 
 	// ID suffix
@@ -479,29 +542,54 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 		idSuffix = fmt.Sprintf(" [%s]", opts.RDID)
 	}
 
-	// Extension — preserve real extension inside .strm (e.g. .avi.strm → .avi.strm)
-	ext := realSTRMExt(opts.Filename)
-
-	if finalType == "movie" {
-		baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+	if finalType == "movie" || animeMovie {
+		baseName := mediaBaseName(opts.Filename)
 		cleanFile := cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
 		destRelPath = filepath.Join(baseFolder, formattedTitle, cleanFile)
 	} else {
 		// Series or Anime
 		var seasonFolder string
-		if len(season) > 0 {
+		if finalType == "anime" {
+			switch extraFolder := animeExtraFolder(opts.Filename, opts.EpisodeTitle); {
+			case extraFolder != "":
+				seasonFolder = extraFolder
+			case len(season) > 0:
+				if opts.SeasonFolderTemplate != "" {
+					seasonFolder = formatFolderComponent(opts.SeasonFolderTemplate, values)
+				} else {
+					seasonFolder = fmt.Sprintf("Season %02d", season[0])
+				}
+			default:
+				seasonFolder = ""
+			}
+		} else if opts.SeasonFolderTemplate != "" {
+			seasonFolder = formatFolderComponent(opts.SeasonFolderTemplate, values)
+		} else if len(season) > 0 {
 			seasonFolder = fmt.Sprintf("Season %02d", season[0])
 		} else {
 			seasonFolder = "Season Unknown"
 		}
 
-		baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+		baseName := mediaBaseName(opts.Filename)
 		cleanFile := cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
 
-		destRelPath = filepath.Join(baseFolder, formattedTitle, seasonFolder, cleanFile)
+		parts := []string{baseFolder, formattedTitle}
+		if seasonFolder != "" {
+			parts = append(parts, seasonFolder)
+		}
+		parts = append(parts, cleanFile)
+		destRelPath = filepath.Join(parts...)
 	}
 
 	return finalType, destRelPath
+}
+
+func mediaBaseName(filename string) string {
+	base := filepath.Base(filename)
+	if strings.HasSuffix(strings.ToLower(base), ".strm") {
+		base = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
 // realSTRMExt extracts the real media extension from a .strm filename.

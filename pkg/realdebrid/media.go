@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strconv"
 )
 
@@ -139,14 +138,9 @@ func (m *MediaInfoResult) EpisodeInt() int {
 
 // FirstVideoStream returns the first video stream detail, or nil if none.
 func (m *MediaInfoResult) FirstVideoStream() *MediaVideoStream {
-	keys := make([]string, 0, len(m.Details.Video))
-	for k := range m.Details.Video {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, raw := range m.Details.Video {
 		var vs MediaVideoStream
-		if err := json.Unmarshal(m.Details.Video[k], &vs); err == nil {
+		if err := json.Unmarshal(raw, &vs); err == nil {
 			return &vs
 		}
 	}
@@ -155,14 +149,9 @@ func (m *MediaInfoResult) FirstVideoStream() *MediaVideoStream {
 
 // FirstAudioStream returns the first audio stream detail, or nil if none.
 func (m *MediaInfoResult) FirstAudioStream() *MediaAudioStream {
-	keys := make([]string, 0, len(m.Details.Audio))
-	for k := range m.Details.Audio {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, raw := range m.Details.Audio {
 		var as MediaAudioStream
-		if err := json.Unmarshal(m.Details.Audio[k], &as); err == nil {
+		if err := json.Unmarshal(raw, &as); err == nil {
 			return &as
 		}
 	}

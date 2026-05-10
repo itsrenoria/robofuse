@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	ptt "github.com/itsrenoria/ptt-go"
 	"github.com/robofuse/robofuse/internal/config"
@@ -71,7 +73,7 @@ func New(cfg *config.Config) *Service {
 	}
 
 	if cfg.TMDBAPIKey != "" {
-		svc.tmdbClient = tmdb.New(cfg.TMDBAPIKey)
+		svc.tmdbClient = tmdb.New(cfg.TMDBAPIKey, tmdb.WithMetadataLanguageResolver(cfg.ResolveMetadataLanguages))
 		svc.logger.Info().Msg("TMDB client initialized")
 	}
 
@@ -646,13 +648,18 @@ func (s *Service) processTorrent(ctx context.Context, torrent *realdebrid.Torren
 			filenames[i] = c.Filename
 		}
 
-		m := matcher.New(s.tmdbClient, s.tvmazeClient, s.config.Matching.ToMatcherConfig())
+		m := matcher.New(s.tmdbClient, s.tvmazeClient, s.config.Matching.ToMatcherConfig(s.config.TmdbLanguages))
+		searchFolder := bestMatcherSearchFolder(torrent)
+		seasonOnly := isGenericSeasonFolder(searchFolder)
+		searchFolder = s.resolveMatcherSearchFolder(searchFolder, seasonOnly, candidateKeys)
+		shape := m.AnalyzeTorrentShape(searchFolder, filenames, rdType, hasSeasonMarkers(torrentCandidates))
 		result := m.MatchContext(ctx, matcher.Input{
-			TorrentFolder:    torrent.Filename,
+			TorrentFolder:    searchFolder,
 			OriginalFilename: torrent.OriginalFilename,
 			Filenames:        filenames,
 			RDType:           rdType,
 			HasSeasonMarkers: hasSeasonMarkers(torrentCandidates),
+			SeasonOnly:       seasonOnly,
 			TitleOverrides:   s.config.Matching.TitleOverrides,
 			TypeOverrides:    s.config.Matching.TypeOverrides,
 		})
@@ -661,18 +668,19 @@ func (s *Service) processTorrent(ctx context.Context, torrent *realdebrid.Torren
 		if result.Mode == "folder" && result.Match != nil {
 			for i := range torrentCandidates {
 				s.strmService.SetTMDBMatch(candidateKeys[i], result.Match)
+				s.strmService.SetMatchProvenance(candidateKeys[i], string(shape), matchSource(result.Match), result.Mode, searchFolder, 0)
 			}
-			if result.Type == "series" && category != CategorySeries {
+			if result.Type == "series" {
 				category = CategorySeries
 				for i := range torrentCandidates {
 					s.strmService.SetClassification(candidateKeys[i], string(CategorySeries))
 				}
-			} else if result.Type == "anime" && category != CategoryAnime {
+			} else if result.Type == "anime" {
 				category = CategoryAnime
 				for i := range torrentCandidates {
 					s.strmService.SetClassification(candidateKeys[i], string(CategoryAnime))
 				}
-			} else if result.Type == "movie" && category != CategoryMovie {
+			} else if result.Type == "movie" {
 				category = CategoryMovie
 				for i := range torrentCandidates {
 					s.strmService.SetClassification(candidateKeys[i], string(CategoryMovie))
@@ -684,6 +692,7 @@ func (s *Service) processTorrent(ctx context.Context, torrent *realdebrid.Torren
 				Str("tmdb_title", result.Match.Title).
 				Int("tmdb_id", result.Match.TMDBID).
 				Str("type", result.Type).
+				Str("shape", string(shape)).
 				Int("files", len(torrentCandidates)).
 				Msg("TMDB match found")
 		} else if result.Mode == "per-file" {
@@ -691,37 +700,45 @@ func (s *Service) processTorrent(ctx context.Context, torrent *realdebrid.Torren
 			for i := range torrentCandidates {
 				if m, ok := result.PerFile[i]; ok && m != nil {
 					s.strmService.SetTMDBMatch(candidateKeys[i], m)
-					if m.Type == "movie" {
-						s.strmService.SetClassification(candidateKeys[i], string(CategoryMovie))
-					} else if m.Type == "show" {
-						s.strmService.SetClassification(candidateKeys[i], string(CategorySeries))
-					}
+					s.strmService.SetMatchProvenance(candidateKeys[i], string(shape), matchSource(m), result.Mode, searchFolder, 0)
+					s.strmService.SetClassification(candidateKeys[i], string(perFileCategory(result.PackType, m)))
 					matched++
+					continue
 				}
+				s.strmService.SetClassification(candidateKeys[i], string(CategoryUnmatched))
+				s.strmService.SetMatchProvenance(candidateKeys[i], string(shape), "", result.Mode, searchFolder, 0)
 			}
 			if matched > 0 {
 				s.logger.Info().
 					Str("folder", torrent.Filename).
 					Int("matched", matched).
 					Int("total", len(torrentCandidates)).
+					Str("shape", string(shape)).
 					Msg("TMDB per-file match found")
 			}
 			if matched == 0 {
 				category = CategoryUnmatched
 				for i := range torrentCandidates {
 					s.strmService.SetClassification(candidateKeys[i], string(CategoryUnmatched))
+					s.strmService.SetMatchProvenance(candidateKeys[i], string(shape), "", result.Mode, searchFolder, 0)
 				}
 			} else {
-				category = CategoryMovie
+				if result.PackType == matcher.PackSeries {
+					category = CategorySeries
+				} else {
+					category = CategoryMovie
+				}
 			}
 		} else if result.Type == "unmatched" {
 			category = CategoryUnmatched
 			for i := range torrentCandidates {
 				s.strmService.SetClassification(candidateKeys[i], string(CategoryUnmatched))
+				s.strmService.SetMatchProvenance(candidateKeys[i], string(shape), "", "unmatched", searchFolder, 0)
 			}
 			s.logger.Info().
 				Str("folder", torrent.Filename).
 				Int("files", len(torrentCandidates)).
+				Str("shape", string(shape)).
 				Msg("TMDB match not confident; routing to unmatched")
 		}
 	}
@@ -754,6 +771,7 @@ writeFiles:
 	}
 
 	// g. Apply name templates
+	s.populateEpisodeIdentity(torrentCandidates, candidateKeys)
 	s.applyNameTemplates(torrentCandidates, candidateKeys)
 
 	// h-i. Calculate organized paths for each candidate
@@ -773,34 +791,45 @@ writeFiles:
 		ft, hasTracking := s.strmService.GetTracking(key)
 
 		opts := organizer.ContentPathOptions{
-			Filename:      c.Filename,
-			TorrentFolder: c.TorrentFolder,
-			RDID:          rdID,
-			AdultPatterns: s.config.AdultPatterns,
-			FolderRules:   convertFolderRules(s.config.FolderRules),
-			KidsMaxRating: s.config.KidsMaxRating,
-			KidsFolder:    s.config.KidsFolder,
-			AnimeFolder:   s.config.AnimeFolder,
-			MovieFolder:   s.config.MovieFolder,
-			SeriesFolder:  s.config.SeriesFolder,
-			OrganizedDir:  s.config.OrganizedDir,
-			Category:      string(category),
-			TMDBIsAnime:   category == CategoryAnime,
+			Filename:             c.Filename,
+			TorrentFolder:        c.TorrentFolder,
+			RDID:                 rdID,
+			AdultPatterns:        s.config.AdultPatterns,
+			FolderRules:          convertFolderRules(s.config.FolderRules),
+			KidsMaxRating:        s.config.KidsMaxRating,
+			KidsFolder:           s.config.KidsFolder,
+			AnimeFolder:          s.config.AnimeFolder,
+			MovieFolder:          s.config.MovieFolder,
+			SeriesFolder:         s.config.SeriesFolder,
+			MovieFolderTemplate:  s.config.MovieFolderTemplate,
+			SeriesFolderTemplate: s.config.SeriesFolderTemplate,
+			SeasonFolderTemplate: s.config.SeasonFolderTemplate,
+			OrganizedDir:         s.config.OrganizedDir,
+			Category:             string(category),
+			TMDBIsAnime:          category == CategoryAnime,
+			EpisodeTitle:         namefmt.EpisodeTitleFromFilename(c.Filename),
 		}
 		if hasTracking {
+			if ft.Classification != "" {
+				opts.Category = ft.Classification
+				opts.TMDBIsAnime = ft.Classification == string(CategoryAnime)
+			}
 			opts.TMDBTitle = ft.TMDBTitle
+			opts.TMDBOriginalTitle = ft.TMDBOriginalTitle
 			opts.TMDBYear = ft.TMDBYear
 			opts.TMDBType = ft.TMDBType
 			opts.TMDBContentRating = ft.TMDBContentRating
+			if ft.TMDBIsAnime {
+				opts.TMDBIsAnime = true
+			}
+			opts.EpisodeSeason = ft.EpisodeSeason
+			opts.EpisodeNumber = ft.EpisodeNumber
+			if ft.EpisodeTitle != "" {
+				opts.EpisodeTitle = ft.EpisodeTitle
+			}
 		}
 
 		contentType, destRelPath := organizer.CalculateContentPath(opts)
-		if hasTracking && ft.OrganizedPath != "" {
-			destRelPath = ft.OrganizedPath
-			if ft.Classification != "" {
-				contentType = ft.Classification
-			}
-		}
 
 		// j. Set organized info on tracking
 		s.strmService.SetOrganizedInfo(key, destRelPath, c.TorrentFolder, c.Filename, contentType)
@@ -837,6 +866,7 @@ writeFiles:
 func (s *Service) buildCandidatesForTorrent(torrent *realdebrid.Torrent, downloadMap map[string]*realdebrid.Download) []realdebrid.STRMCandidate {
 	minSize := s.config.MinFileSizeBytes()
 	var candidates []realdebrid.STRMCandidate
+	var smallVideos []realdebrid.STRMCandidate
 
 	folderName := torrent.Filename
 	if torrent.OriginalFilename != "" {
@@ -855,6 +885,14 @@ func (s *Service) buildCandidatesForTorrent(torrent *realdebrid.Torrent, downloa
 		isSub := isSubtitle(download.Filename)
 
 		if isVid && download.Filesize < minSize {
+			smallVideos = append(smallVideos, realdebrid.STRMCandidate{
+				TorrentID:     torrent.ID,
+				TorrentFolder: folderName,
+				Filename:      download.Filename,
+				DownloadURL:   download.Download,
+				Link:          download.Link,
+				Filesize:      download.Filesize,
+			})
 			continue
 		}
 		if !isVid && !isSub {
@@ -870,7 +908,64 @@ func (s *Service) buildCandidatesForTorrent(torrent *realdebrid.Torrent, downloa
 			Filesize:      download.Filesize,
 		})
 	}
+	if len(candidates) == 0 && shouldKeepSmallVideoPack(torrent, smallVideos) {
+		return smallVideos
+	}
 	return candidates
+}
+
+var (
+	seasonPackNameRE    = regexp.MustCompile(`(?i)(?:\bseason\b|\bs\d{1,2}\b|сезон|~ep\.\d+)`)
+	numberedEpisodeName = regexp.MustCompile(`(?:^|[\s._\-\[\(])(?:s\d{1,2}e)?\d{1,3}(?:\D|$)`)
+	genericSeasonNameRE = regexp.MustCompile(`(?i)^\s*(?:season|сезон)\s*\d{1,2}(?:\s*\([^)]*\))?\s*$`)
+)
+
+func shouldKeepSmallVideoPack(torrent *realdebrid.Torrent, videos []realdebrid.STRMCandidate) bool {
+	if len(videos) < 3 {
+		return false
+	}
+	folderName := torrent.Filename
+	if torrent.OriginalFilename != "" {
+		folderName += " " + torrent.OriginalFilename
+	}
+	if seasonPackNameRE.MatchString(folderName) {
+		return true
+	}
+	numbered := 0
+	for _, video := range videos {
+		if numberedEpisodeName.MatchString(video.Filename) {
+			numbered++
+		}
+	}
+	return numbered >= 3 && numbered*2 >= len(videos)
+}
+
+func bestMatcherSearchFolder(torrent *realdebrid.Torrent) string {
+	if torrent.OriginalFilename != "" && isGenericSeasonFolder(torrent.Filename) {
+		return torrent.OriginalFilename
+	}
+	return torrent.Filename
+}
+
+func (s *Service) resolveMatcherSearchFolder(searchFolder string, seasonOnly bool, candidateKeys map[int]string) string {
+	if seasonOnly {
+		return searchFolder
+	}
+	if _, hasTitleOverride := s.config.Matching.TitleOverrides[searchFolder]; hasTitleOverride || !hasCyrillic(searchFolder) || hasSubstantialLatin(searchFolder) {
+		return searchFolder
+	}
+	for _, key := range candidateKeys {
+		if ft, ok := s.strmService.GetTracking(key); ok && ft.RDMediaInfo != nil && ft.RDMediaInfo.Filename != "" {
+			if !hasCyrillic(ft.RDMediaInfo.Filename) {
+				return ft.RDMediaInfo.Filename
+			}
+		}
+	}
+	return searchFolder
+}
+
+func isGenericSeasonFolder(name string) bool {
+	return genericSeasonNameRE.MatchString(name)
 }
 
 // candidateKey returns a stable, globally unique key for a candidate.
@@ -910,10 +1005,7 @@ func (s *Service) fetchMediaInfoForCandidate(ctx context.Context, c realdebrid.S
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		var httpErr *request.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
-			s.strmService.MarkRDMediaFailed(key)
-		}
+		s.strmService.MarkRDMediaFailed(key)
 		return
 	}
 
@@ -1038,6 +1130,102 @@ func hasSeasonMarkers(candidates []realdebrid.STRMCandidate) bool {
 	return false
 }
 
+func perFileCategory(packType matcher.PackType, match *tmdb.MatchResult) TorrentCategory {
+	if match == nil {
+		return CategoryUnmatched
+	}
+	if match.IsAnime {
+		return CategoryAnime
+	}
+	if match.Type == "show" {
+		return CategorySeries
+	}
+	if match.Type == "movie" {
+		if packType == matcher.PackSeries {
+			return CategoryUnmatched
+		}
+		return CategoryMovie
+	}
+	return CategoryUnmatched
+}
+
+func (s *Service) populateEpisodeIdentity(candidates []realdebrid.STRMCandidate, keys map[int]string) {
+	for i, c := range candidates {
+		key := keys[i]
+		ft, _ := s.strmService.GetTracking(key)
+		season, episode, title, source := deriveEpisodeIdentity(c, ft.RDSeason, ft.RDEpisode, ft.EpisodeTitle)
+		s.strmService.SetEpisodeIdentity(key, season, episode, title, source)
+	}
+}
+
+func deriveEpisodeIdentity(candidate realdebrid.STRMCandidate, rdSeason, rdEpisode int, storedTitle string) (season, episode int, title, source string) {
+	if rdSeason > 0 || rdEpisode > 0 {
+		season = rdSeason
+		episode = rdEpisode
+		source = "rd"
+	}
+
+	if storedTitle != "" {
+		title = storedTitle
+	}
+	if title == "" {
+		title = namefmt.EpisodeTitleFromFilename(candidate.Filename)
+		if title != "" && source == "" {
+			source = "filename"
+		}
+	}
+
+	if season == 0 || episode == 0 {
+		base := strings.TrimSuffix(candidate.Filename, filepath.Ext(candidate.Filename))
+		parsed := ptt.Parse(base)
+		parent := ptt.Parse(filepath.Base(candidate.TorrentFolder))
+		if season == 0 {
+			if len(parsed.Seasons) > 0 {
+				season = parsed.Seasons[0]
+			} else if len(parent.Seasons) > 0 {
+				season = parent.Seasons[0]
+			}
+		}
+		if episode == 0 && len(parsed.Episodes) > 0 {
+			episode = parsed.Episodes[0]
+		}
+		if source == "" && (season > 0 || episode > 0) {
+			source = "parser"
+		}
+	}
+
+	return season, episode, title, source
+}
+
+func hasCyrillic(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Cyrillic, r) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSubstantialLatin(s string) bool {
+	count := 0
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+			count++
+			if count >= 4 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func matchSource(match *tmdb.MatchResult) string {
+	if match == nil || match.Source == "" {
+		return "tmdb"
+	}
+	return match.Source
+}
+
 // applyNameTemplates applies user-configured filename templates to candidates.
 // Reads tracking for TMDB/RD/ffprobe metadata to populate template values.
 func (s *Service) applyNameTemplates(candidates []realdebrid.STRMCandidate, keys map[int]string) {
@@ -1076,6 +1264,19 @@ func (s *Service) applyNameTemplates(candidates []realdebrid.STRMCandidate, keys
 		}
 		if len(parsed.Episodes) > 0 {
 			v.Episode = parsed.Episodes[0]
+		}
+		v.EpisodeTitle = namefmt.EpisodeTitleFromFilename(c.Filename)
+
+		if hasTracking {
+			if ft.EpisodeSeason > 0 {
+				v.Season = ft.EpisodeSeason
+			}
+			if ft.EpisodeNumber > 0 {
+				v.Episode = ft.EpisodeNumber
+			}
+			if ft.EpisodeTitle != "" {
+				v.EpisodeTitle = ft.EpisodeTitle
+			}
 		}
 
 		// TMDB overrides
@@ -1188,8 +1389,6 @@ func convertFolderRules(rules []config.FolderRule) []organizer.FolderRule {
 			Pattern:  r.Pattern,
 			Target:   r.Target,
 			SkipTMDB: r.SkipTMDB,
-			Adult:    r.Adult,
-			Compiled: r.Compiled,
 		}
 	}
 	return result

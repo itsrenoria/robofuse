@@ -13,27 +13,43 @@ import (
 
 	"github.com/robofuse/robofuse/internal/logger"
 	"github.com/robofuse/robofuse/internal/request"
-	"github.com/robofuse/robofuse/pkg/namefmt"
 	"github.com/rs/zerolog"
 	"golang.org/x/time/rate"
 )
 
 // tmdb.go — TheMovieDB API v3 client for metadata matching and enrichment.
 
-const baseURL = "https://api.themoviedb.org/3"
+const defaultBaseURL = "https://api.themoviedb.org/3"
+
+// MetadataLanguageResolver returns display metadata locales to try for a
+// matched item based on its canonical origin metadata.
+type MetadataLanguageResolver func(originalLanguage string, countries []string) []string
+
+// Option configures a TMDB client.
+type Option func(*Client)
+
+// WithMetadataLanguageResolver configures post-match display metadata selection.
+func WithMetadataLanguageResolver(resolver MetadataLanguageResolver) Option {
+	return func(c *Client) {
+		c.metadataLanguages = resolver
+	}
+}
 
 // Client makes requests to the TMDB API.
 type Client struct {
-	apiKey      string
-	reqClient   *request.Client
-	rateLimiter *rate.Limiter
-	logger      zerolog.Logger
+	apiKey            string
+	baseURL           string
+	reqClient         *request.Client
+	rateLimiter       *rate.Limiter
+	logger            zerolog.Logger
+	metadataLanguages MetadataLanguageResolver
 }
 
 // New creates a new TMDB client.
-func New(apiKey string) *Client {
-	return &Client{
-		apiKey: apiKey,
+func New(apiKey string, opts ...Option) *Client {
+	client := &Client{
+		apiKey:  apiKey,
+		baseURL: defaultBaseURL,
 		reqClient: request.New(
 			request.WithTimeout(10*time.Second),
 			request.WithMaxRetries(1),
@@ -41,6 +57,12 @@ func New(apiKey string) *Client {
 		rateLimiter: rate.NewLimiter(rate.Limit(3), 3),
 		logger:      logger.New("tmdb"),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(client)
+		}
+	}
+	return client
 }
 
 // ---------------------------------------------------------------------------
@@ -90,37 +112,46 @@ type searchTVResponse struct {
 
 // MovieDetails from /movie/{id}.
 type MovieDetails struct {
-	ID            int     `json:"id"`
-	Title         string  `json:"title"`
-	OriginalTitle string  `json:"original_title"`
-	Overview      string  `json:"overview"`
-	PosterPath    string  `json:"poster_path"`
-	BackdropPath  string  `json:"backdrop_path"`
-	ReleaseDate   string  `json:"release_date"`
-	Runtime       int     `json:"runtime"`
-	VoteAverage   float64 `json:"vote_average"`
-	Genres        []Genre `json:"genres"`
-	IMDBID        string  `json:"imdb_id"`
+	ID                  int                 `json:"id"`
+	Title               string              `json:"title"`
+	OriginalTitle       string              `json:"original_title"`
+	OriginalLanguage    string              `json:"original_language"`
+	Overview            string              `json:"overview"`
+	PosterPath          string              `json:"poster_path"`
+	BackdropPath        string              `json:"backdrop_path"`
+	ReleaseDate         string              `json:"release_date"`
+	Runtime             int                 `json:"runtime"`
+	VoteAverage         float64             `json:"vote_average"`
+	Genres              []Genre             `json:"genres"`
+	IMDBID              string              `json:"imdb_id"`
+	ProductionCountries []ProductionCountry `json:"production_countries"`
 }
 
 // TVDetails from /tv/{id}.
 type TVDetails struct {
-	ID              int     `json:"id"`
-	Name            string  `json:"name"`
-	OriginalName    string  `json:"original_name"`
-	Overview        string  `json:"overview"`
-	PosterPath      string  `json:"poster_path"`
-	BackdropPath    string  `json:"backdrop_path"`
-	FirstAirDate    string  `json:"first_air_date"`
-	VoteAverage     float64 `json:"vote_average"`
-	Genres          []Genre `json:"genres"`
-	NumberOfSeasons int     `json:"number_of_seasons"`
+	ID               int      `json:"id"`
+	Name             string   `json:"name"`
+	OriginalName     string   `json:"original_name"`
+	OriginalLanguage string   `json:"original_language"`
+	Overview         string   `json:"overview"`
+	PosterPath       string   `json:"poster_path"`
+	BackdropPath     string   `json:"backdrop_path"`
+	FirstAirDate     string   `json:"first_air_date"`
+	VoteAverage      float64  `json:"vote_average"`
+	Genres           []Genre  `json:"genres"`
+	NumberOfSeasons  int      `json:"number_of_seasons"`
+	OriginCountry    []string `json:"origin_country"`
 }
 
 // Genre from TMDB.
 type Genre struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
+}
+
+// ProductionCountry from TMDB movie details.
+type ProductionCountry struct {
+	Iso3166_1 string `json:"iso_3166_1"`
 }
 
 // Keyword from TMDB.
@@ -145,25 +176,38 @@ type tvKeywordsResponse struct {
 
 // MatchResult holds the matched metadata ready for renaming and NFO.
 type MatchResult struct {
-	TMDBID        int      `json:"tmdb_id"`
-	TVMazeID      int      `json:"tvmaze_id,omitempty"`
-	Title         string   `json:"title"`
-	OriginalTitle string   `json:"original_title"`
-	Year          int      `json:"year"`
-	Type          string   `json:"type"` // "movie" or "show"
-	Overview      string   `json:"overview"`
-	PosterPath    string   `json:"poster_path"`
-	BackdropPath  string   `json:"backdrop_path"`
-	VoteAverage   float64  `json:"vote_average"`
-	IsAnime       bool     `json:"is_anime,omitempty"`
-	GenreIDs      []int    `json:"genre_ids,omitempty"`
-	Genres        []string `json:"genres"`
-	Keywords      []string `json:"keywords,omitempty"`
-	Runtime       int      `json:"runtime,omitempty"`
-	IMDBID        string   `json:"imdb_id,omitempty"`
-	Seasons       int      `json:"number_of_seasons,omitempty"`
-	ContentRating string   `json:"content_rating,omitempty"` // US certification (G, PG, TV-Y, etc.)
-	Source        string   `json:"source,omitempty"`         // "tmdb" or "tvmaze"
+	TMDBID                   int                        `json:"tmdb_id"`
+	TVMazeID                 int                        `json:"tvmaze_id,omitempty"`
+	Title                    string                     `json:"title"`
+	OriginalTitle            string                     `json:"original_title"`
+	Year                     int                        `json:"year"`
+	Type                     string                     `json:"type"` // "movie" or "show"
+	Overview                 string                     `json:"overview"`
+	PosterPath               string                     `json:"poster_path"`
+	BackdropPath             string                     `json:"backdrop_path"`
+	VoteAverage              float64                    `json:"vote_average"`
+	IsAnime                  bool                       `json:"is_anime,omitempty"`
+	GenreIDs                 []int                      `json:"genre_ids,omitempty"`
+	Genres                   []string                   `json:"genres"`
+	Keywords                 []string                   `json:"keywords,omitempty"`
+	Runtime                  int                        `json:"runtime,omitempty"`
+	IMDBID                   string                     `json:"imdb_id,omitempty"`
+	Seasons                  int                        `json:"number_of_seasons,omitempty"`
+	ContentRating            string                     `json:"content_rating,omitempty"` // US certification (G, PG, TV-Y, etc.)
+	Source                   string                     `json:"source,omitempty"`         // "tmdb" or "tvmaze"
+	SelectedMetadataLanguage string                     `json:"selected_metadata_language,omitempty"`
+	OriginalLanguage         string                     `json:"original_language,omitempty"`
+	OriginCountries          []string                   `json:"origin_countries,omitempty"`
+	MetadataVariants         map[string]MetadataVariant `json:"metadata_variants,omitempty"`
+}
+
+// MetadataVariant stores display metadata for a specific locale.
+type MetadataVariant struct {
+	Title        string   `json:"title,omitempty"`
+	Overview     string   `json:"overview,omitempty"`
+	Genres       []string `json:"genres,omitempty"`
+	PosterPath   string   `json:"poster_path,omitempty"`
+	BackdropPath string   `json:"backdrop_path,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -172,12 +216,12 @@ type MatchResult struct {
 
 // SearchMovie searches for a movie by title and optional year.
 // Prefers exact title matches over popularity to avoid wrong results.
-func (c *Client) SearchMovie(title string, year int) (*SearchMovieResult, error) {
-	return c.SearchMovieContext(context.Background(), title, year)
+func (c *Client) SearchMovie(title string, year int, language string) (*SearchMovieResult, error) {
+	return c.SearchMovieContext(context.Background(), title, year, language)
 }
 
-func (c *Client) SearchMovieContext(ctx context.Context, title string, year int) (*SearchMovieResult, error) {
-	results, err := c.SearchMovieCandidatesContext(ctx, title, year)
+func (c *Client) SearchMovieContext(ctx context.Context, title string, year int, language string) (*SearchMovieResult, error) {
+	results, err := c.SearchMovieCandidatesContext(ctx, title, year, language)
 	if err != nil || len(results) == 0 {
 		return nil, err
 	}
@@ -193,15 +237,18 @@ func (c *Client) SearchMovieContext(ctx context.Context, title string, year int)
 }
 
 // SearchMovieCandidates searches for movies by title and returns raw TMDB candidates.
-func (c *Client) SearchMovieCandidates(title string, year int) ([]SearchMovieResult, error) {
-	return c.SearchMovieCandidatesContext(context.Background(), title, year)
+func (c *Client) SearchMovieCandidates(title string, year int, language string) ([]SearchMovieResult, error) {
+	return c.SearchMovieCandidatesContext(context.Background(), title, year, language)
 }
 
-func (c *Client) SearchMovieCandidatesContext(ctx context.Context, title string, year int) ([]SearchMovieResult, error) {
+func (c *Client) SearchMovieCandidatesContext(ctx context.Context, title string, year int, language string) ([]SearchMovieResult, error) {
 	q := gourl.Values{}
 	q.Set("query", title)
 	if year > 0 {
 		q.Set("year", strconv.Itoa(year))
+	}
+	if language != "" {
+		q.Set("language", language)
 	}
 
 	var resp searchMovieResponse
@@ -213,12 +260,12 @@ func (c *Client) SearchMovieCandidatesContext(ctx context.Context, title string,
 
 // SearchTV searches for a TV show by name and optional year.
 // Prefers exact title matches over popularity.
-func (c *Client) SearchTV(name string, year int) (*SearchTVResult, error) {
-	return c.SearchTVContext(context.Background(), name, year)
+func (c *Client) SearchTV(name string, year int, language string) (*SearchTVResult, error) {
+	return c.SearchTVContext(context.Background(), name, year, language)
 }
 
-func (c *Client) SearchTVContext(ctx context.Context, name string, year int) (*SearchTVResult, error) {
-	results, err := c.SearchTVCandidatesContext(ctx, name, year)
+func (c *Client) SearchTVContext(ctx context.Context, name string, year int, language string) (*SearchTVResult, error) {
+	results, err := c.SearchTVCandidatesContext(ctx, name, year, language)
 	if err != nil || len(results) == 0 {
 		return nil, err
 	}
@@ -233,15 +280,18 @@ func (c *Client) SearchTVContext(ctx context.Context, name string, year int) (*S
 }
 
 // SearchTVCandidates searches for TV shows by name and returns raw TMDB candidates.
-func (c *Client) SearchTVCandidates(name string, year int) ([]SearchTVResult, error) {
-	return c.SearchTVCandidatesContext(context.Background(), name, year)
+func (c *Client) SearchTVCandidates(name string, year int, language string) ([]SearchTVResult, error) {
+	return c.SearchTVCandidatesContext(context.Background(), name, year, language)
 }
 
-func (c *Client) SearchTVCandidatesContext(ctx context.Context, name string, year int) ([]SearchTVResult, error) {
+func (c *Client) SearchTVCandidatesContext(ctx context.Context, name string, year int, language string) ([]SearchTVResult, error) {
 	q := gourl.Values{}
 	q.Set("query", name)
 	if year > 0 {
 		q.Set("first_air_date_year", strconv.Itoa(year))
+	}
+	if language != "" {
+		q.Set("language", language)
 	}
 
 	var resp searchTVResponse
@@ -291,6 +341,11 @@ func scoreResults[T any](results []T, query string, year int, getInfo func(T) (s
 	}
 
 	if best == nil {
+		// Fallback: return first result
+		if len(results) > 0 {
+			r := results[0]
+			return &r
+		}
 		return nil
 	}
 	r := results[best.idx]
@@ -321,8 +376,16 @@ func (c *Client) GetMovieDetails(tmdbID int) (*MovieDetails, error) {
 }
 
 func (c *Client) GetMovieDetailsContext(ctx context.Context, tmdbID int) (*MovieDetails, error) {
+	return c.getMovieDetailsContext(ctx, tmdbID, "")
+}
+
+func (c *Client) getMovieDetailsContext(ctx context.Context, tmdbID int, language string) (*MovieDetails, error) {
 	var resp MovieDetails
-	if err := c.get(ctx, fmt.Sprintf("/movie/%d", tmdbID), nil, &resp); err != nil {
+	params := gourl.Values{}
+	if language != "" {
+		params.Set("language", language)
+	}
+	if err := c.get(ctx, fmt.Sprintf("/movie/%d", tmdbID), params, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -334,8 +397,16 @@ func (c *Client) GetTVDetails(tmdbID int) (*TVDetails, error) {
 }
 
 func (c *Client) GetTVDetailsContext(ctx context.Context, tmdbID int) (*TVDetails, error) {
+	return c.getTVDetailsContext(ctx, tmdbID, "")
+}
+
+func (c *Client) getTVDetailsContext(ctx context.Context, tmdbID int, language string) (*TVDetails, error) {
 	var resp TVDetails
-	if err := c.get(ctx, fmt.Sprintf("/tv/%d", tmdbID), nil, &resp); err != nil {
+	params := gourl.Values{}
+	if language != "" {
+		params.Set("language", language)
+	}
+	if err := c.get(ctx, fmt.Sprintf("/tv/%d", tmdbID), params, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -383,35 +454,35 @@ func HasAnimeKeyword(keywords []string) bool {
 // mediaType: "movie" or "show"
 // title: search query (from PTT or RD)
 // year: optional year hint
-func (c *Client) Match(mediaType, title string, year int) (*MatchResult, error) {
-	return c.MatchContext(context.Background(), mediaType, title, year)
+func (c *Client) Match(mediaType, title string, year int, language string) (*MatchResult, error) {
+	return c.MatchContext(context.Background(), mediaType, title, year, language)
 }
 
-func (c *Client) MatchContext(ctx context.Context, mediaType, title string, year int) (*MatchResult, error) {
+func (c *Client) MatchContext(ctx context.Context, mediaType, title string, year int, language string) (*MatchResult, error) {
 	switch mediaType {
 	case "movie":
-		sr, err := c.SearchMovieContext(ctx, title, year)
+		sr, err := c.SearchMovieContext(ctx, title, year, language)
 		if err != nil || sr == nil {
 			return nil, err
 		}
-		details, err := c.GetMovieDetailsContext(ctx, sr.ID)
+		details, err := c.getMovieDetailsContext(ctx, sr.ID, "")
 		if err != nil {
 			return nil, err
 		}
-		match := movieToMatch(details)
+		match := c.localizedMovieMatch(ctx, details)
 		c.addMovieKeywords(ctx, match)
 		return match, nil
 
 	case "show":
-		sr, err := c.SearchTVContext(ctx, title, year)
+		sr, err := c.SearchTVContext(ctx, title, year, language)
 		if err != nil || sr == nil {
 			return nil, err
 		}
-		details, err := c.GetTVDetailsContext(ctx, sr.ID)
+		details, err := c.getTVDetailsContext(ctx, sr.ID, "")
 		if err != nil {
 			return nil, err
 		}
-		match := tvToMatch(details, sr.FirstAirDate)
+		match := c.localizedTVMatch(ctx, details, sr.FirstAirDate)
 		c.addTVKeywords(ctx, match)
 		return match, nil
 	}
@@ -425,7 +496,7 @@ func (c *Client) FindByIMDB(imdbID string) (*MatchResult, error) {
 }
 
 func (c *Client) FindByIMDBContext(ctx context.Context, imdbID string) (*MatchResult, error) {
-	url := fmt.Sprintf("%s/find/%s", baseURL, imdbID)
+	url := fmt.Sprintf("%s/find/%s", c.baseURL, imdbID)
 	params := gourl.Values{}
 	params.Set("api_key", c.apiKey)
 	params.Set("external_source", "imdb_id")
@@ -487,32 +558,20 @@ func (c *Client) FindByIMDBContext(ctx context.Context, imdbID string) (*MatchRe
 
 	// Prefer TV results (IMDB hints usually appear on series torrents)
 	if len(result.TVResults) > 0 {
-		r := result.TVResults[0]
-		year := 0
-		if len(r.FirstAirDate) >= 4 {
-			year, _ = strconv.Atoi(r.FirstAirDate[:4])
+		details, err := c.getTVDetailsContext(ctx, result.TVResults[0].ID, "")
+		if err != nil {
+			return nil, err
 		}
-		match := &MatchResult{
-			TMDBID: r.ID, Title: r.Name, Type: "show", Year: year,
-			Overview: r.Overview, PosterPath: posterURL(r.PosterPath),
-			BackdropPath: backdropURL(r.BackdropPath), VoteAverage: r.VoteAverage,
-			GenreIDs: r.GenreIDs,
-		}
+		match := c.localizedTVMatch(ctx, details, details.FirstAirDate)
 		c.addTVKeywords(ctx, match)
 		return match, nil
 	}
 	if len(result.MovieResults) > 0 {
-		r := result.MovieResults[0]
-		year := 0
-		if len(r.ReleaseDate) >= 4 {
-			year, _ = strconv.Atoi(r.ReleaseDate[:4])
+		details, err := c.getMovieDetailsContext(ctx, result.MovieResults[0].ID, "")
+		if err != nil {
+			return nil, err
 		}
-		match := &MatchResult{
-			TMDBID: r.ID, Title: r.Title, Type: "movie", Year: year,
-			Overview: r.Overview, PosterPath: posterURL(r.PosterPath),
-			BackdropPath: backdropURL(r.BackdropPath), VoteAverage: r.VoteAverage,
-			GenreIDs: r.GenreIDs,
-		}
+		match := c.localizedMovieMatch(ctx, details)
 		c.addMovieKeywords(ctx, match)
 		return match, nil
 	}
@@ -524,7 +583,7 @@ func (c *Client) FindByIMDBContext(ctx context.Context, imdbID string) (*MatchRe
 // ---------------------------------------------------------------------------
 
 func (c *Client) get(ctx context.Context, path string, params gourl.Values, target interface{}) error {
-	u, _ := gourl.Parse(baseURL + path)
+	u, _ := gourl.Parse(c.baseURL + path)
 	if params == nil {
 		params = gourl.Values{}
 	}
@@ -574,6 +633,180 @@ func keywordNames(keywords []Keyword) []string {
 	return names
 }
 
+func mergeMovieDetails(base, localized *MovieDetails) *MovieDetails {
+	if base == nil {
+		return localized
+	}
+	out := *base
+	if localized == nil {
+		return &out
+	}
+	if strings.TrimSpace(localized.Title) != "" {
+		out.Title = localized.Title
+	}
+	if strings.TrimSpace(localized.Overview) != "" {
+		out.Overview = localized.Overview
+	}
+	if len(localized.Genres) > 0 {
+		out.Genres = append([]Genre(nil), localized.Genres...)
+	}
+	if localized.PosterPath != "" {
+		out.PosterPath = localized.PosterPath
+	}
+	if localized.BackdropPath != "" {
+		out.BackdropPath = localized.BackdropPath
+	}
+	if localized.ReleaseDate != "" {
+		out.ReleaseDate = localized.ReleaseDate
+	}
+	if localized.Runtime > 0 {
+		out.Runtime = localized.Runtime
+	}
+	if localized.VoteAverage > 0 {
+		out.VoteAverage = localized.VoteAverage
+	}
+	if localized.IMDBID != "" {
+		out.IMDBID = localized.IMDBID
+	}
+	if len(localized.ProductionCountries) > 0 {
+		out.ProductionCountries = append([]ProductionCountry(nil), localized.ProductionCountries...)
+	}
+	return &out
+}
+
+func mergeTVDetails(base, localized *TVDetails) *TVDetails {
+	if base == nil {
+		return localized
+	}
+	out := *base
+	if localized == nil {
+		return &out
+	}
+	if strings.TrimSpace(localized.Name) != "" {
+		out.Name = localized.Name
+	}
+	if strings.TrimSpace(localized.Overview) != "" {
+		out.Overview = localized.Overview
+	}
+	if len(localized.Genres) > 0 {
+		out.Genres = append([]Genre(nil), localized.Genres...)
+	}
+	if localized.PosterPath != "" {
+		out.PosterPath = localized.PosterPath
+	}
+	if localized.BackdropPath != "" {
+		out.BackdropPath = localized.BackdropPath
+	}
+	if localized.FirstAirDate != "" {
+		out.FirstAirDate = localized.FirstAirDate
+	}
+	if localized.VoteAverage > 0 {
+		out.VoteAverage = localized.VoteAverage
+	}
+	if localized.NumberOfSeasons > 0 {
+		out.NumberOfSeasons = localized.NumberOfSeasons
+	}
+	if len(localized.OriginCountry) > 0 {
+		out.OriginCountry = append([]string(nil), localized.OriginCountry...)
+	}
+	return &out
+}
+
+func genreNames(genres []Genre) []string {
+	if len(genres) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(genres))
+	for _, genre := range genres {
+		if name := strings.TrimSpace(genre.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func movieCountries(countries []ProductionCountry) []string {
+	if len(countries) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(countries))
+	for _, country := range countries {
+		if code := normalizeCountry(country.Iso3166_1); code != "" {
+			out = append(out, code)
+		}
+	}
+	return uniqueLocaleStrings(out)
+}
+
+func normalizeCountries(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if normalized := normalizeCountry(value); normalized != "" {
+			out = append(out, normalized)
+		}
+	}
+	return uniqueLocaleStrings(out)
+}
+
+func normalizeLocales(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if normalized := normalizeLocaleTag(value); normalized != "" {
+			out = append(out, normalized)
+		}
+	}
+	return uniqueLocaleStrings(out)
+}
+
+func normalizeLocaleTag(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "_", "-"))
+	if value == "" {
+		return ""
+	}
+	parts := strings.Split(value, "-")
+	if len(parts) == 1 {
+		return strings.ToLower(parts[0])
+	}
+	parts[0] = strings.ToLower(parts[0])
+	parts[1] = strings.ToUpper(parts[1])
+	return strings.Join(parts, "-")
+}
+
+func normalizeCountry(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "_", "-"))
+	if value == "" {
+		return ""
+	}
+	return strings.ToUpper(value)
+}
+
+func normalizedText(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
+}
+
+func uniqueLocaleStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 func (c *Client) addMovieKeywords(ctx context.Context, match *MatchResult) {
 	keywords, err := c.GetMovieKeywordsContext(ctx, match.TMDBID)
 	if err != nil {
@@ -581,7 +814,9 @@ func (c *Client) addMovieKeywords(ctx context.Context, match *MatchResult) {
 		return
 	}
 	match.Keywords = keywords
-	match.IsAnime = HasAnimeKeyword(keywords)
+	if HasAnimeKeyword(keywords) {
+		match.IsAnime = true
+	}
 }
 
 func (c *Client) addTVKeywords(ctx context.Context, match *MatchResult) {
@@ -591,7 +826,9 @@ func (c *Client) addTVKeywords(ctx context.Context, match *MatchResult) {
 		return
 	}
 	match.Keywords = keywords
-	match.IsAnime = HasAnimeKeyword(keywords)
+	if HasAnimeKeyword(keywords) {
+		match.IsAnime = true
+	}
 }
 
 func releaseYear(date string) int {
@@ -604,41 +841,63 @@ func releaseYear(date string) int {
 
 func movieToMatch(d *MovieDetails) *MatchResult {
 	m := &MatchResult{
-		TMDBID:        d.ID,
-		Title:         d.Title,
-		OriginalTitle: d.OriginalTitle,
-		Type:          "movie",
-		Overview:      d.Overview,
-		PosterPath:    posterURL(d.PosterPath),
-		BackdropPath:  backdropURL(d.BackdropPath),
-		VoteAverage:   d.VoteAverage,
-		Runtime:       d.Runtime,
-		IMDBID:        d.IMDBID,
+		TMDBID:           d.ID,
+		Title:            d.Title,
+		OriginalTitle:    d.OriginalTitle,
+		Type:             "movie",
+		Overview:         d.Overview,
+		PosterPath:       posterURL(d.PosterPath),
+		BackdropPath:     backdropURL(d.BackdropPath),
+		VoteAverage:      d.VoteAverage,
+		Runtime:          d.Runtime,
+		IMDBID:           d.IMDBID,
+		Source:           "tmdb",
+		OriginalLanguage: d.OriginalLanguage,
+		OriginCountries:  movieCountries(d.ProductionCountries),
 	}
 	m.Year = releaseYear(d.ReleaseDate)
 	for _, g := range d.Genres {
+		m.GenreIDs = append(m.GenreIDs, g.ID)
 		m.Genres = append(m.Genres, g.Name)
 	}
+	m.IsAnime = isJapaneseAnimation(d.OriginalLanguage, m.GenreIDs)
 	return m
 }
 
 func tvToMatch(d *TVDetails, firstAir string) *MatchResult {
 	m := &MatchResult{
-		TMDBID:        d.ID,
-		Title:         d.Name,
-		OriginalTitle: d.OriginalName,
-		Type:          "show",
-		Overview:      d.Overview,
-		PosterPath:    posterURL(d.PosterPath),
-		BackdropPath:  backdropURL(d.BackdropPath),
-		VoteAverage:   d.VoteAverage,
-		Seasons:       d.NumberOfSeasons,
+		TMDBID:           d.ID,
+		Title:            d.Name,
+		OriginalTitle:    d.OriginalName,
+		Type:             "show",
+		Overview:         d.Overview,
+		PosterPath:       posterURL(d.PosterPath),
+		BackdropPath:     backdropURL(d.BackdropPath),
+		VoteAverage:      d.VoteAverage,
+		Seasons:          d.NumberOfSeasons,
+		Source:           "tmdb",
+		OriginalLanguage: d.OriginalLanguage,
+		OriginCountries:  normalizeCountries(d.OriginCountry),
 	}
 	m.Year = releaseYear(firstAir)
 	for _, g := range d.Genres {
+		m.GenreIDs = append(m.GenreIDs, g.ID)
 		m.Genres = append(m.Genres, g.Name)
 	}
+	m.IsAnime = isJapaneseAnimation(d.OriginalLanguage, m.GenreIDs)
 	return m
+}
+
+func isJapaneseAnimation(originalLanguage string, genreIDs []int) bool {
+	if originalLanguage != "ja" {
+		return false
+	}
+	for _, id := range genreIDs {
+		if id == 16 {
+			return true
+		}
+	}
+	return false
 }
 
 func posterURL(path string) string {
@@ -667,7 +926,17 @@ func BackdropURL(path string) string {
 
 // CleanTitle returns a filesystem-safe version of the title for use in paths.
 func (m *MatchResult) CleanTitle() string {
-	return namefmt.Clean(m.Title)
+	t := m.Title
+	t = strings.ReplaceAll(t, "/", "_")
+	t = strings.ReplaceAll(t, "\\", "_")
+	t = strings.ReplaceAll(t, ":", "_")
+	t = strings.ReplaceAll(t, "*", "_")
+	t = strings.ReplaceAll(t, "?", "_")
+	t = strings.ReplaceAll(t, "\"", "_")
+	t = strings.ReplaceAll(t, "<", "_")
+	t = strings.ReplaceAll(t, ">", "_")
+	t = strings.ReplaceAll(t, "|", "_")
+	return strings.TrimSpace(t)
 }
 
 // ---------------------------------------------------------------------------
@@ -702,19 +971,147 @@ func (c *Client) GetMatchByID(tmdbID int) (*MatchResult, error) {
 }
 
 func (c *Client) GetMatchByIDContext(ctx context.Context, tmdbID int) (*MatchResult, error) {
-	tv, err := c.GetTVDetailsContext(ctx, tmdbID)
+	tv, err := c.getTVDetailsContext(ctx, tmdbID, "")
 	if err == nil && tv != nil {
-		match := tvToMatch(tv, tv.FirstAirDate)
+		match := c.localizedTVMatch(ctx, tv, tv.FirstAirDate)
 		c.addTVKeywords(ctx, match)
 		return match, nil
 	}
-	movie, err := c.GetMovieDetailsContext(ctx, tmdbID)
+	movie, err := c.getMovieDetailsContext(ctx, tmdbID, "")
 	if err == nil && movie != nil {
-		match := movieToMatch(movie)
+		match := c.localizedMovieMatch(ctx, movie)
 		c.addMovieKeywords(ctx, match)
 		return match, nil
 	}
 	return nil, fmt.Errorf("no match found for TMDB ID %d", tmdbID)
+}
+
+func (c *Client) localizedMovieMatch(ctx context.Context, base *MovieDetails) *MatchResult {
+	if base == nil {
+		return nil
+	}
+	match := movieToMatch(base)
+	match.MetadataVariants = map[string]MetadataVariant{
+		match.OriginalLanguage: metadataVariantFromMovieDetails(base),
+	}
+	match.SelectedMetadataLanguage = match.OriginalLanguage
+
+	if c.metadataLanguages == nil {
+		return match
+	}
+	languages := normalizeLocales(c.metadataLanguages(base.OriginalLanguage, movieCountries(base.ProductionCountries)))
+	if len(languages) == 0 {
+		return match
+	}
+
+	selected := match.MetadataVariants[match.OriginalLanguage]
+	selectedLanguage := match.SelectedMetadataLanguage
+	for _, language := range languages {
+		localized, err := c.getMovieDetailsContext(ctx, base.ID, language)
+		if err != nil || localized == nil {
+			continue
+		}
+		merged := mergeMovieDetails(base, localized)
+		match.MetadataVariants[language] = metadataVariantFromMovieDetails(merged)
+		if movieLocalizationHasTitle(localized) && selectedLanguage == match.OriginalLanguage {
+			selected = match.MetadataVariants[language]
+			selectedLanguage = language
+		}
+	}
+
+	applyMetadataVariant(match, selected)
+	match.SelectedMetadataLanguage = selectedLanguage
+	return match
+}
+
+func (c *Client) localizedTVMatch(ctx context.Context, base *TVDetails, firstAir string) *MatchResult {
+	if base == nil {
+		return nil
+	}
+	match := tvToMatch(base, firstAir)
+	match.MetadataVariants = map[string]MetadataVariant{
+		match.OriginalLanguage: metadataVariantFromTVDetails(base),
+	}
+	match.SelectedMetadataLanguage = match.OriginalLanguage
+
+	if c.metadataLanguages == nil {
+		return match
+	}
+	languages := normalizeLocales(c.metadataLanguages(base.OriginalLanguage, base.OriginCountry))
+	if len(languages) == 0 {
+		return match
+	}
+
+	selected := match.MetadataVariants[match.OriginalLanguage]
+	selectedLanguage := match.SelectedMetadataLanguage
+	for _, language := range languages {
+		localized, err := c.getTVDetailsContext(ctx, base.ID, language)
+		if err != nil || localized == nil {
+			continue
+		}
+		merged := mergeTVDetails(base, localized)
+		match.MetadataVariants[language] = metadataVariantFromTVDetails(merged)
+		if tvLocalizationHasTitle(localized) && selectedLanguage == match.OriginalLanguage {
+			selected = match.MetadataVariants[language]
+			selectedLanguage = language
+		}
+	}
+
+	applyMetadataVariant(match, selected)
+	match.SelectedMetadataLanguage = selectedLanguage
+	return match
+}
+
+func metadataVariantFromMovieDetails(d *MovieDetails) MetadataVariant {
+	if d == nil {
+		return MetadataVariant{}
+	}
+	return MetadataVariant{
+		Title:        d.Title,
+		Overview:     d.Overview,
+		Genres:       cloneStrings(genreNames(d.Genres)),
+		PosterPath:   posterURL(d.PosterPath),
+		BackdropPath: backdropURL(d.BackdropPath),
+	}
+}
+
+func metadataVariantFromTVDetails(d *TVDetails) MetadataVariant {
+	if d == nil {
+		return MetadataVariant{}
+	}
+	return MetadataVariant{
+		Title:        d.Name,
+		Overview:     d.Overview,
+		Genres:       cloneStrings(genreNames(d.Genres)),
+		PosterPath:   posterURL(d.PosterPath),
+		BackdropPath: backdropURL(d.BackdropPath),
+	}
+}
+
+func applyMetadataVariant(match *MatchResult, variant MetadataVariant) {
+	if match == nil {
+		return
+	}
+	match.Title = variant.Title
+	match.Overview = variant.Overview
+	match.Genres = cloneStrings(variant.Genres)
+	match.PosterPath = variant.PosterPath
+	match.BackdropPath = variant.BackdropPath
+}
+
+func movieLocalizationHasTitle(localized *MovieDetails) bool {
+	return localized != nil && normalizedText(localized.Title) != ""
+}
+
+func tvLocalizationHasTitle(localized *TVDetails) bool {
+	return localized != nil && normalizedText(localized.Name) != ""
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return append([]string(nil), values...)
 }
 
 // GetMovieCertification returns the US certification for a movie (G, PG, PG-13, R, etc.).

@@ -11,8 +11,10 @@ import (
 
 // downloads.go fetches and normalizes Real-Debrid downloads.
 
-// GetDownloads fetches all downloads with pagination
-// Filters for streamable=1 and deduplicates by link (keeps latest generated)
+// GetDownloads fetches all downloads with pagination.
+// Deduplicates by link (keeps latest generated). Candidate generation applies
+// the media extension/size filter later; RD's streamable flag is too strict for
+// some valid playable files.
 func (c *Client) GetDownloads(ctx context.Context) ([]*Download, error) {
 	c.logger.Debug().Msg("Fetching all downloads with pagination...")
 
@@ -78,20 +80,11 @@ func (c *Client) GetDownloads(ctx context.Context) ([]*Download, error) {
 		offset += len(downloads)
 	}
 
-	// Filter for streamable only
-	var streamable []*Download
-	for _, d := range allDownloads {
-		if d.IsStreamable() {
-			streamable = append(streamable, d)
-		}
-	}
-
 	// Deduplicate by link (keep latest generated)
-	deduped := c.deduplicateDownloads(streamable)
+	deduped := c.filterDownloadsForLibrary(allDownloads)
 
 	c.logger.Debug().
 		Int("total", len(allDownloads)).
-		Int("streamable", len(streamable)).
 		Int("deduped", len(deduped)).
 		Msg("Downloads fetched and filtered")
 
@@ -115,6 +108,10 @@ func (c *Client) deduplicateDownloads(downloads []*Download) []*Download {
 	}
 
 	return result
+}
+
+func (c *Client) filterDownloadsForLibrary(downloads []*Download) []*Download {
+	return c.deduplicateDownloads(downloads)
 }
 
 // DeleteDownload deletes a download from Real-Debrid

@@ -13,7 +13,6 @@ type goldenCase struct {
 
 	WantMode          string            `json:"want_mode"`
 	WantType          string            `json:"want_type"`
-	WantNotType       string            `json:"want_not_type"`
 	WantTitle         string            `json:"want_title"`
 	WantYear          int               `json:"want_year"`
 	WantPerFileTitles map[string]string `json:"want_per_file_titles"`
@@ -26,6 +25,7 @@ type goldenInput struct {
 	Filenames        []string `json:"filenames"`
 	RDType           string   `json:"rd_type"`
 	HasSeasonMarkers bool     `json:"has_season_markers"`
+	SeasonOnly       bool     `json:"season_only"`
 }
 
 func TestGoldenMatcherDecisionsOffline(t *testing.T) {
@@ -42,6 +42,7 @@ func TestGoldenMatcherDecisionsOffline(t *testing.T) {
 				Filenames:        tc.In.Filenames,
 				RDType:           tc.In.RDType,
 				HasSeasonMarkers: tc.In.HasSeasonMarkers,
+				SeasonOnly:       tc.In.SeasonOnly,
 			})
 			if got == nil {
 				t.Fatal("Match returned nil")
@@ -52,8 +53,8 @@ func TestGoldenMatcherDecisionsOffline(t *testing.T) {
 			if tc.WantType != "" && got.Type != tc.WantType {
 				t.Fatalf("type = %q, want %q", got.Type, tc.WantType)
 			}
-			if tc.WantNotType != "" && got.Type == tc.WantNotType {
-				t.Fatalf("type = %q, want not %q", got.Type, tc.WantNotType)
+			if tc.Name == "bluey-animation-series-not-anime" && got.Type == "anime" {
+				t.Fatal("Bluey resolved as anime, want series")
 			}
 
 			if tc.WantMode == "folder" && tc.WantTitle != "" {

@@ -90,7 +90,7 @@ func (q *Queue) Add(link, torrentID, filename, errorType, errorMsg string) {
 	}
 	// Include the error detail if it contains more than just the error type
 	if errorMsg != "" && errorMsg != errorType {
-		logEvt.Bool("errorDetailPresent", true)
+		logEvt.Str("error", errorMsg)
 	}
 	logEvt.Msg("Added to retry queue")
 }

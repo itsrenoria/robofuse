@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/robofuse/robofuse/internal/config"
 	"github.com/robofuse/robofuse/internal/health"
@@ -39,27 +38,6 @@ with media players like Infuse, Jellyfin, and Emby.`,
 			if logLevel != "" {
 				logger.SetLogLevel(logLevel)
 			}
-			// Only start observability server for operational commands, not
-			// --help/--version/completion. Use a timed select on an error
-			// channel so port-bind failures are caught deterministically.
-			switch cmd.Name() {
-			case "run", "watch", "dry-run":
-				errCh := make(chan error, 1)
-				go func() {
-					mux := http.NewServeMux()
-					mux.Handle("/healthz", health.Handler())
-					mux.Handle("/metrics", metrics.Handler())
-					errCh <- http.ListenAndServe("127.0.0.1:9090", mux)
-				}()
-
-				select {
-				case err := <-errCh:
-					return fmt.Errorf("observability server failed: %w", err)
-				case <-time.After(50 * time.Millisecond):
-					// Server likely started successfully.
-				}
-			}
-
 			return nil
 		},
 	}
@@ -72,6 +50,7 @@ with media players like Infuse, Jellyfin, and Emby.`,
 		Use:   "run",
 		Short: "Run sync once and exit",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			startObservabilityServer()
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
 				return err
@@ -87,6 +66,7 @@ with media players like Infuse, Jellyfin, and Emby.`,
 		Use:   "watch",
 		Short: "Run sync continuously",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			startObservabilityServer()
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
 				return err
@@ -102,6 +82,7 @@ with media players like Infuse, Jellyfin, and Emby.`,
 		Use:   "dry-run",
 		Short: "Preview changes without making them",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			startObservabilityServer()
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
 				return err
@@ -119,6 +100,17 @@ with media players like Infuse, Jellyfin, and Emby.`,
 	}
 }
 
+func startObservabilityServer() {
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/healthz", health.Handler())
+		mux.Handle("/metrics", metrics.Handler())
+		if err := http.ListenAndServe("127.0.0.1:9090", mux); err != nil {
+			fmt.Fprintf(os.Stderr, "Observability server disabled: %v\n", err)
+		}
+	}()
+}
+
 func printBanner() {
 	banner := `
   ██████╗  ██████╗ ██████╗  ██████╗ ███████╗██╗   ██╗███████╗███████╗
@@ -134,66 +126,52 @@ func printBanner() {
 
 func runSync(cfg *config.Config, dryRun bool) {
 	log := logger.Default()
-	service := sync.New(cfg)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if rebuildOrganized && !dryRun {
 		fmt.Println("Rebuilding organized library from scratch...")
 
-		var allowedBases []string
-		if cwd, err := os.Getwd(); err == nil {
-			allowedBases = append(allowedBases, cwd)
-		}
-		allowedBases = append(allowedBases, "/data", "/config")
+		cwd, _ := os.Getwd()
+		allowedBases := []string{cwd, "/data", "/config"}
 
-		safeRemoveAll := func(path string) error {
+		safeRemoveAll := func(path string) {
 			if path == "" {
-				return nil
+				return
 			}
 			absPath, err := filepath.Abs(path)
 			if err != nil {
-				return fmt.Errorf("cannot resolve path %s: %w", path, err)
-			}
-			canonPath, err := filepath.EvalSymlinks(absPath)
-			if err == nil {
-				absPath = canonPath
+				fmt.Printf("WARNING: cannot resolve path %s — skipping\n", path)
+				return
 			}
 			ok := false
 			for _, base := range allowedBases {
-				canonBase, err := filepath.EvalSymlinks(base)
+				resolvedBase, err := filepath.EvalSymlinks(base)
 				if err != nil {
 					continue
 				}
-				relPath, err := filepath.Rel(canonBase, absPath)
+				rel, err := filepath.Rel(resolvedBase, absPath)
 				if err != nil {
 					continue
 				}
-				if !strings.HasPrefix(relPath, "..") {
+				if !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
 					ok = true
 					break
 				}
 			}
 			if !ok {
-				return fmt.Errorf("%s is outside safe paths — refusing to delete for safety", absPath)
+				fmt.Printf("WARNING: %s is outside safe paths — skipping rebuild for safety\n", absPath)
+				return
 			}
 			fmt.Printf("  Removing: %s\n", path)
-			if err := os.RemoveAll(path); err != nil {
-				return fmt.Errorf("failed to remove %s: %w", path, err)
-			}
-			return nil
+			os.RemoveAll(path)
 		}
 
-		if err := safeRemoveAll(cfg.OrganizedDir); err != nil {
-			fmt.Fprintf(os.Stderr, "Rebuild error: %v\n", err)
-			os.Exit(1)
-		}
-		if err := safeRemoveAll(cfg.TrackingFile); err != nil {
-			fmt.Fprintf(os.Stderr, "Rebuild error: %v\n", err)
-			os.Exit(1)
-		}
+		safeRemoveAll(cfg.OrganizedDir)
+		safeRemoveAll(cfg.TrackingFile)
 	}
 
+	service := sync.New(cfg)
 	result, err := service.Run(ctx, dryRun)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -228,7 +206,7 @@ func runWatch(cfg *config.Config) {
 		if errors.Is(err, context.Canceled) {
 			log.Info().Msg("Watch mode shut down gracefully")
 			service.WaitForProbes()
-			os.Exit(0)
+			return
 		}
 		log.Error().Err(err).Msg("Watch mode failed")
 		service.WaitForProbes()

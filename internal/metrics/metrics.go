@@ -10,7 +10,6 @@ import (
 // metrics.go — Prometheus metrics for operational visibility.
 
 var (
-	// UnrestrictTotal counts unrestrict operations by status (success, failure, cached).
 	UnrestrictTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "robofuse_unrestrict_total",
@@ -18,7 +17,6 @@ var (
 		},
 		[]string{"status"},
 	)
-	// CycleDuration tracks the duration of each sync cycle in seconds.
 	CycleDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Name:    "robofuse_cycle_duration_seconds",
@@ -26,14 +24,12 @@ var (
 			Buckets: prometheus.DefBuckets,
 		},
 	)
-	// RetryQueueDepth tracks the current size of the retry queue.
 	RetryQueueDepth = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "robofuse_retry_queue_depth",
 			Help: "Current retry queue size.",
 		},
 	)
-	// STRMTotal counts STRM file operations by action (created, skipped, deleted).
 	STRMTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "robofuse_strm_total",
