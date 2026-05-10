@@ -82,7 +82,7 @@ func (s *Service) processRetryQueue(ctx context.Context, torrents []*realdebrid.
 
 			download, err := s.rd.UnrestrictLink(ctx, item.Link, item.Filename)
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return
 				}
 				// Check if it's a retryable error (503)

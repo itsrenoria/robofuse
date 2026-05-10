@@ -143,7 +143,7 @@ func TestCalculateContentPath_FolderRuleSkipTMDB(t *testing.T) {
 		TMDBYear:      2023,
 		TMDBType:      "movie",
 		FolderRules: []FolderRule{
-			{Pattern: "rule-folder", Target: "CustomTarget", SkipTMDB: true},
+			{Pattern: "rule-folder", Target: "CustomTarget", SkipTMDB: true, Adult: true},
 		},
 	}
 	contentType, destRelPath := CalculateContentPath(opts)

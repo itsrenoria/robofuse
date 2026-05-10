@@ -146,6 +146,7 @@ type tvKeywordsResponse struct {
 // MatchResult holds the matched metadata ready for renaming and NFO.
 type MatchResult struct {
 	TMDBID        int      `json:"tmdb_id"`
+	TVMazeID      int      `json:"tvmaze_id,omitempty"`
 	Title         string   `json:"title"`
 	OriginalTitle string   `json:"original_title"`
 	Year          int      `json:"year"`

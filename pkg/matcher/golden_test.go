@@ -13,6 +13,7 @@ type goldenCase struct {
 
 	WantMode          string            `json:"want_mode"`
 	WantType          string            `json:"want_type"`
+	WantNotType       string            `json:"want_not_type"`
 	WantTitle         string            `json:"want_title"`
 	WantYear          int               `json:"want_year"`
 	WantPerFileTitles map[string]string `json:"want_per_file_titles"`
@@ -51,8 +52,8 @@ func TestGoldenMatcherDecisionsOffline(t *testing.T) {
 			if tc.WantType != "" && got.Type != tc.WantType {
 				t.Fatalf("type = %q, want %q", got.Type, tc.WantType)
 			}
-			if tc.Name == "bluey-animation-series-not-anime" && got.Type == "anime" {
-				t.Fatal("Bluey resolved as anime, want series")
+			if tc.WantNotType != "" && got.Type == tc.WantNotType {
+				t.Fatalf("type = %q, want not %q", got.Type, tc.WantNotType)
 			}
 
 			if tc.WantMode == "folder" && tc.WantTitle != "" {

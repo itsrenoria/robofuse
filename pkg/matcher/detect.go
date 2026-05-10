@@ -9,7 +9,7 @@ func (m *Matcher) isCollection(folder string, filenames []string, rdType string)
 	}
 	lower := strings.ToLower(folder)
 	for _, kw := range m.cfg.CollectionKeywords {
-		if strings.Contains(lower, kw) {
+		if strings.Contains(lower, strings.ToLower(kw)) {
 			return true
 		}
 	}
@@ -37,7 +37,7 @@ func (m *Matcher) isAnimeFromKeywords(folder string, filenames []string) bool {
 	for _, t := range targets {
 		lower := strings.ToLower(t)
 		for _, kw := range m.cfg.AnimeKeywords {
-			if strings.Contains(lower, kw) {
+			if strings.Contains(lower, strings.ToLower(kw)) {
 				return true
 			}
 		}

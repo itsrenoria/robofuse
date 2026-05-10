@@ -3,6 +3,7 @@ package repair
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/robofuse/robofuse/internal/config"
 	"github.com/robofuse/robofuse/internal/logger"
@@ -55,6 +56,9 @@ func (s *Service) RepairTorrent(ctx context.Context, torrent *realdebrid.Torrent
 	count, err := s.rd.SelectVideoFiles(ctx, newID)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = s.rd.DeleteTorrent(cleanupCtx, newID)
 			return ctxErr
 		}
 		// Clean up the new torrent if selection fails
@@ -128,6 +132,9 @@ func (s *Service) RepairTorrentByHash(ctx context.Context, hash string, dryRun b
 	count, err := s.rd.SelectVideoFiles(ctx, newID)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = s.rd.DeleteTorrent(cleanupCtx, newID)
 			return ctxErr
 		}
 		s.rd.DeleteTorrent(ctx, newID)

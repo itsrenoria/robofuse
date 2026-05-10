@@ -212,7 +212,7 @@ func likelyTypeFromEvidence(ev parseEvidence, input Input) string {
 func (m *Matcher) hasCollectionHint(raw string) bool {
 	lower := strings.ToLower(raw)
 	for _, kw := range m.cfg.CollectionKeywords {
-		if strings.Contains(lower, kw) {
+		if strings.Contains(lower, strings.ToLower(strings.TrimSpace(kw))) {
 			return true
 		}
 	}

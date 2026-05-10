@@ -1,6 +1,7 @@
 package strm
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/robofuse/robofuse/pkg/tracking"
@@ -42,6 +43,7 @@ func (s *Service) UpdateSTRM(relativePath, newURL, link, torrentID string) error
 	// Save tracking data
 	if err := s.tracking.Save(); err != nil {
 		s.logger.Warn().Err(err).Msg("Failed to save tracking after update")
+		return fmt.Errorf("saving tracking after STRM update: %w", err)
 	}
 
 	s.logger.Debug().Str("path", relativePath).Msg("Refreshed STRM file")

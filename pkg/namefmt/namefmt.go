@@ -132,8 +132,10 @@ func HDRLabel(hdr string) string {
 	switch strings.ToUpper(hdr) {
 	case "DV", "DOLBYVISION":
 		return "Dolby Vision"
-	case "HDR10", "HDR10PLUS":
-		return hdr
+	case "HDR10":
+		return "HDR10"
+	case "HDR10PLUS", "HDR10+":
+		return "HDR10+"
 	default:
 		return hdr
 	}
@@ -192,5 +194,15 @@ func Clean(name string) string {
 	name = strings.ReplaceAll(name, " ]", "]")
 	name = strings.ReplaceAll(name, "[ ", "[")
 	name = multiSpaceRE.ReplaceAllString(name, " ")
-	return strings.TrimSpace(name)
+	name = strings.TrimSpace(name)
+	if name == "." || name == ".." || name == "" {
+		return "_"
+	}
+	if strings.HasPrefix(name, ".") {
+		name = strings.TrimLeft(name, ".")
+		if name == "" {
+			return "_"
+		}
+	}
+	return name
 }

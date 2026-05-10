@@ -155,9 +155,21 @@ func runSync(cfg *config.Config, dryRun bool) {
 			if err != nil {
 				return fmt.Errorf("cannot resolve path %s: %w", path, err)
 			}
+			canonPath, err := filepath.EvalSymlinks(absPath)
+			if err == nil {
+				absPath = canonPath
+			}
 			ok := false
 			for _, base := range allowedBases {
-				if strings.HasPrefix(absPath, base+string(filepath.Separator)) {
+				canonBase, err := filepath.EvalSymlinks(base)
+				if err != nil {
+					continue
+				}
+				relPath, err := filepath.Rel(canonBase, absPath)
+				if err != nil {
+					continue
+				}
+				if !strings.HasPrefix(relPath, "..") {
 					ok = true
 					break
 				}
@@ -213,6 +225,11 @@ func runWatch(cfg *config.Config) {
 
 	service := sync.New(cfg)
 	if err := service.Watch(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Info().Msg("Watch mode shut down gracefully")
+			service.WaitForProbes()
+			os.Exit(0)
+		}
 		log.Error().Err(err).Msg("Watch mode failed")
 		service.WaitForProbes()
 		os.Exit(1)

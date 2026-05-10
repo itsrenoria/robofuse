@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -92,36 +93,39 @@ func Probe(ctx context.Context, url string, timeout time.Duration, ffprobePath s
 
 	// Check that ffprobe exists
 	if _, err := exec.LookPath(ffprobePath); err != nil {
-		return nil, fmt.Errorf("ffprobe not found at %q: %w", ffprobePath, err)
+		logger.Warn().Str("path", ffprobePath).Err(err).Msg("ffprobe not found")
+		return nil, nil
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// -v quiet: suppress banner and debug
-	// -print_format json: machine-parseable output
-	// -show_format -show_streams: include both format and per-stream metadata
 	cmd := exec.CommandContext(probeCtx, ffprobePath,
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
-		"--",     // prevent flag injection
+		"--",
 		url,
 	)
 
 	output, err := cmd.Output()
 	if err != nil {
-		// Distinguish timeout from other failures
-		if probeCtx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("ffprobe timed out after %s: %w", timeout, err)
+		if errors.Is(err, context.Canceled) {
+			return nil, fmt.Errorf("ffprobe cancelled: %w", err)
 		}
-		return nil, fmt.Errorf("ffprobe failed: %w", err)
+		if probeCtx.Err() == context.DeadlineExceeded {
+			logger.Warn().Str("url", url).Dur("timeout", timeout).Msg("ffprobe timed out")
+		} else {
+			logger.Warn().Err(err).Str("url", url).Msg("ffprobe failed")
+		}
+		return nil, nil
 	}
 
 	var raw ffprobeOutput
 	if err := json.Unmarshal(output, &raw); err != nil {
-		return nil, fmt.Errorf("parsing ffprobe output: %w", err)
+		logger.Warn().Err(err).Str("url", url).Msg("parsing ffprobe output failed")
+		return nil, nil
 	}
 
 	info := &MediaInfo{

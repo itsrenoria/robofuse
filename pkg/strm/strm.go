@@ -369,10 +369,14 @@ func (s *Service) writeSTRMJSON(workDir, filePath, trackingKey, url, link, torre
 			meta["organized_path"] = ft.OrganizedPath
 		}
 	}
-	metaJSON, _ := json.Marshal(meta)
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		content := []byte(urlLine + "\n")
+		return os.WriteFile(fullPath, content, 0600)
+	}
 
-	content := urlLine + "\n#robofuse:" + string(metaJSON) + "\n"
-	return os.WriteFile(fullPath, []byte(content), 0600)
+	content := []byte(fmt.Sprintf("%s\n#robofuse:%s\n", urlLine, metaJSON))
+	return os.WriteFile(fullPath, content, 0600)
 }
 
 // writeNFO creates a Kodi-compatible .nfo file alongside the .strm file.
@@ -602,7 +606,7 @@ func (s *Service) dispatchProbes(ctx context.Context, targets []probeTarget) {
 					Err(err).
 					Str("path", t.path).
 					Msg("ffprobe failed")
-				s.tracking.SetProbeAttempts(t.stableKey, s.config.ProbeMaxRetries)
+				s.tracking.IncrementProbeAttempts(t.stableKey)
 				return
 			}
 			if media == nil {

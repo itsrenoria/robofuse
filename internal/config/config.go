@@ -82,6 +82,8 @@ type FolderRule struct {
 	Target   string `json:"target"`    // destination folder (e.g. "X", "Anime", "Documentary")
 	SkipTMDB bool   `json:"skip_tmdb"` // skip TMDB matching for this folder
 	Adult    bool   `json:"adult"`     // route this content to adult section (separate from skip_tmdb)
+
+	Compiled *regexp.Regexp // pre-compiled regex for ~ patterns (populated during validation)
 }
 
 // MatchingConfig holds configuration for the TMDB matching pipeline.
@@ -308,11 +310,14 @@ func (c *Config) Validate() error {
 
 	// Validate folder rule regex patterns at startup so malformed
 	// patterns fail fast rather than being silently dropped at runtime.
-	for i, r := range c.FolderRules {
+	for i := range c.FolderRules {
+		r := &c.FolderRules[i]
 		if strings.HasPrefix(r.Pattern, "~") {
-			if _, err := regexp.Compile(r.Pattern[1:]); err != nil {
+			compiled, err := regexp.Compile(r.Pattern[1:])
+			if err != nil {
 				return fmt.Errorf("folder_rules[%d] pattern %q: invalid regex: %w", i, r.Pattern, err)
 			}
+			r.Compiled = compiled
 		}
 	}
 
@@ -334,9 +339,15 @@ func (c *Config) MatchFolderRule(folderName string) *FolderRule {
 			continue
 		}
 		if strings.HasPrefix(r.Pattern, "~") {
-			re, err := regexp.Compile(r.Pattern[1:])
-			if err == nil && re.MatchString(folderName) {
-				return r
+			if r.Compiled != nil {
+				if r.Compiled.MatchString(folderName) {
+					return r
+				}
+			} else {
+				re, err := regexp.Compile(r.Pattern[1:])
+				if err == nil && re.MatchString(folderName) {
+					return r
+				}
 			}
 		} else if strings.Contains(lower, strings.ToLower(r.Pattern)) {
 			return r
@@ -354,9 +365,20 @@ func (c *Config) IsAdultFolder(folderName string) bool {
 			return true
 		}
 	}
-	// Check folder_rules with explicit adult flag
-	if r := c.MatchFolderRule(folderName); r != nil && r.Adult {
-		return true
+	// Check all folder_rules for match + adult flag
+	lower := strings.ToLower(folderName)
+	for i := range c.FolderRules {
+		r := &c.FolderRules[i]
+		if !r.Adult || r.Pattern == "" {
+			continue
+		}
+		if strings.HasPrefix(r.Pattern, "~") {
+			if r.Compiled != nil && r.Compiled.MatchString(folderName) {
+				return true
+			}
+		} else if strings.Contains(lower, strings.ToLower(r.Pattern)) {
+			return true
+		}
 	}
 	return false
 }

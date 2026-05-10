@@ -81,7 +81,7 @@ func TestCalculateContentPath_TableDriven(t *testing.T) {
 				Filename:      "video.mkv.strm",
 				TorrentFolder: "nsfw/Some.Content",
 				FolderRules: []FolderRule{
-					{Pattern: "nsfw", Target: "NSFW", SkipTMDB: false},
+					{Pattern: "nsfw", Target: "NSFW", SkipTMDB: false, Adult: true},
 				},
 			},
 			wantType:     "adult",
@@ -93,11 +93,11 @@ func TestCalculateContentPath_TableDriven(t *testing.T) {
 				Filename:      "video.mkv.strm",
 				TorrentFolder: "special-folder/content",
 				FolderRules: []FolderRule{
-					{Pattern: "~special-folder", Target: "CustomX", SkipTMDB: false},
+					{Pattern: "~special-folder", Target: "CustomX", SkipTMDB: false, Adult: true},
 				},
 			},
 			wantType:     "adult",
-			wantContains: []string{"X"}, // regex detection works; target defaults to "X" in buildAdultPath
+			wantContains: []string{"CustomX"},
 		},
 
 		// ── Kids ────────────────────────────────────────────

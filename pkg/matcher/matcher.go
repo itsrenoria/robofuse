@@ -158,7 +158,7 @@ func (m *Matcher) tvmazeFallback(ctx context.Context, evidence parseEvidence, in
 		return nil
 	}
 	res := &tmdb.MatchResult{
-		TMDBID: tvMatch.ID, Title: tvMatch.Name,
+		TVMazeID: tvMatch.ID, Title: tvMatch.Name,
 		Type: "show", Year: tvMatch.Year,
 		Overview: tvMatch.Summary, Source: "tvmaze",
 	}

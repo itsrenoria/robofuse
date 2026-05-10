@@ -87,7 +87,25 @@ func Write(strmPath string, data *Data) error {
 		return err
 	}
 
-	return os.WriteFile(nfoPath, xmlContent, 0644)
+	tmp, err := os.CreateTemp(filepath.Dir(nfoPath), ".nfo-*.tmp")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(xmlContent); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), nfoPath)
 }
 
 // strmPathToNFOPath replaces the .strm extension with .nfo.
@@ -198,7 +216,7 @@ func generateXML(data *Data) ([]byte, error) {
 			ep.UniqueIDs = []xmlUniqueID{{Type: "tmdb", ID: fmt.Sprintf("%d", data.TMDBID)}}
 		}
 		body, err = xml.MarshalIndent(ep, "", "  ")
-	default:
+	case "movie":
 		mov := xmlMovie{
 			Title:         data.Title,
 			OriginalTitle: origTitle(data.OriginalTitle, data.Title),
@@ -219,6 +237,8 @@ func generateXML(data *Data) ([]byte, error) {
 			}
 		}
 		body, err = xml.MarshalIndent(mov, "", "  ")
+	default:
+		return nil, fmt.Errorf("unsupported nfo type %q", data.Type)
 	}
 
 	if err != nil {

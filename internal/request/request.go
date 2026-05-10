@@ -3,6 +3,7 @@ package request
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -392,6 +393,9 @@ func Gzip(body []byte) []byte {
 // and HTTP-level errors (503, 429, 502, 504 status codes and
 // Real-Debrid sentinel codes).
 func IsRetryableError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	errString := err.Error()
 
 	if strings.Contains(errString, "connection reset by peer") ||

@@ -21,7 +21,7 @@ type Result struct {
 }
 
 // Classify determines whether a file is a movie or TV episode.
-// Priority: RD type → TMDB type → PTT parsing → custom rules.
+// Priority: PTT/custom parsing → RD type override → TMDB type override (highest priority).
 func Classify(filename, folderName string, rdType, tmdbType string) *Result {
 	r := &Result{}
 

@@ -910,7 +910,10 @@ func (s *Service) fetchMediaInfoForCandidate(ctx context.Context, c realdebrid.S
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		s.strmService.MarkRDMediaFailed(key)
+		var httpErr *request.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == 404 {
+			s.strmService.MarkRDMediaFailed(key)
+		}
 		return
 	}
 
@@ -1185,6 +1188,8 @@ func convertFolderRules(rules []config.FolderRule) []organizer.FolderRule {
 			Pattern:  r.Pattern,
 			Target:   r.Target,
 			SkipTMDB: r.SkipTMDB,
+			Adult:    r.Adult,
+			Compiled: r.Compiled,
 		}
 	}
 	return result

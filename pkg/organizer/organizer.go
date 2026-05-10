@@ -65,6 +65,9 @@ type FolderRule struct {
 	Pattern  string
 	Target   string
 	SkipTMDB bool
+	Adult    bool
+
+	Compiled *regexp.Regexp
 }
 
 // ExistingFolderOptions holds inputs for FindExistingSeriesFolder.
@@ -161,13 +164,19 @@ func isAdultPath(sourceRelPath string, adultPatterns []string, folderRules []Fol
 		}
 	}
 	for _, r := range folderRules {
-		if r.Pattern == "" {
+		if !r.Adult || r.Pattern == "" {
 			continue
 		}
 		if strings.HasPrefix(r.Pattern, "~") {
-			re, err := regexp.Compile(r.Pattern[1:])
-			if err == nil && re.MatchString(filepath.Dir(sourceRelPath)) {
-				return true
+			if r.Compiled != nil {
+				if r.Compiled.MatchString(filepath.Dir(sourceRelPath)) {
+					return true
+				}
+			} else {
+				re, err := regexp.Compile(r.Pattern[1:])
+				if err == nil && re.MatchString(filepath.Dir(sourceRelPath)) {
+					return true
+				}
 			}
 		} else if strings.Contains(folder, strings.ToLower(r.Pattern)) {
 			return true
@@ -182,13 +191,19 @@ func isAdultPath(sourceRelPath string, adultPatterns []string, folderRules []Fol
 		}
 	}
 	for _, r := range folderRules {
-		if r.Pattern == "" {
+		if !r.Adult || r.Pattern == "" {
 			continue
 		}
 		if strings.HasPrefix(r.Pattern, "~") {
-			re, err := regexp.Compile(r.Pattern[1:])
-			if err == nil && re.MatchString(filepath.Base(sourceRelPath)) {
-				return true
+			if r.Compiled != nil {
+				if r.Compiled.MatchString(filepath.Base(sourceRelPath)) {
+					return true
+				}
+			} else {
+				re, err := regexp.Compile(r.Pattern[1:])
+				if err == nil && re.MatchString(filepath.Base(sourceRelPath)) {
+					return true
+				}
 			}
 		} else if strings.Contains(filename, strings.ToLower(r.Pattern)) {
 			return true
@@ -207,7 +222,23 @@ func buildAdultPath(sourceRelPath, filename, rdID string, folderRules []FolderRu
 	target := "X"
 	folderLower := strings.ToLower(filepath.Dir(sourceRelPath))
 	for _, r := range folderRules {
-		if r.Pattern != "" && strings.Contains(folderLower, strings.ToLower(r.Pattern)) {
+		if r.Pattern == "" {
+			continue
+		}
+		if strings.HasPrefix(r.Pattern, "~") {
+			if r.Compiled != nil {
+				if r.Compiled.MatchString(filepath.Dir(sourceRelPath)) {
+					target = r.Target
+					break
+				}
+			} else {
+				re, err := regexp.Compile(r.Pattern[1:])
+				if err == nil && re.MatchString(filepath.Dir(sourceRelPath)) {
+					target = r.Target
+					break
+				}
+			}
+		} else if strings.Contains(folderLower, strings.ToLower(r.Pattern)) {
 			target = r.Target
 			break
 		}
@@ -278,7 +309,7 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 
 	var finalType, title string
 	var year int
-	var season, episode []int
+	var season []int
 
 	if isSeriesParent {
 		finalType = "series"
@@ -300,10 +331,6 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 		} else {
 			season = pSeason
 		}
-
-		if len(fEpisode) > 0 {
-			episode = fEpisode
-		}
 	} else if isSeriesFilename {
 		finalType = "series"
 		if fTitle != "" {
@@ -313,7 +340,6 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 		}
 		year = fYear
 		season = fSeason
-		episode = fEpisode
 	} else {
 		finalType = "movie"
 		if fTitle != "" {
@@ -469,14 +495,8 @@ func CalculateContentPath(opts ContentPathOptions) (contentType string, destRelP
 			seasonFolder = "Season Unknown"
 		}
 
-		var cleanFile string
-		if len(episode) > 0 {
-			baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
-			cleanFile = cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
-		} else {
-			baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
-			cleanFile = cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
-		}
+		baseName := strings.TrimSuffix(filepath.Base(opts.Filename), filepath.Ext(opts.Filename))
+		cleanFile := cleanFilename(fmt.Sprintf("%s%s%s", baseName, idSuffix, ext))
 
 		destRelPath = filepath.Join(baseFolder, formattedTitle, seasonFolder, cleanFile)
 	}

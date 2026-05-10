@@ -23,6 +23,7 @@
     },
     "want_mode": "folder",
     "want_type": "series",
+    "want_not_type": "anime",
     "want_title": "Bluey",
     "want_year": 2018
   },
