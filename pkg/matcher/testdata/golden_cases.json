@@ -98,5 +98,84 @@
     },
     "want_mode": "folder",
     "want_type": "unmatched"
+  },
+  {
+    "name": "generic-season-episode-title-pack-unmatched",
+    "input": {
+      "torrent_folder": "Сезон 1 (1984-1985)",
+      "filenames": [
+        "01 Brother's Keeper [Pilot].mkv",
+        "02 Heart Of Darkness.mkv",
+        "03 Cool Runnin'.mkv"
+      ],
+      "rd_type": "show",
+      "has_season_markers": true,
+      "season_only": true
+    },
+    "want_mode": "folder",
+    "want_type": "unmatched"
+  },
+  {
+    "name": "season-only-shared-series-identity",
+    "input": {
+      "torrent_folder": "Сезон 1 (1984-1985)",
+      "filenames": [
+        "Miami Vice S01E01-02.mkv",
+        "Miami Vice S01E03.mkv",
+        "Miami Vice S01E04.mkv"
+      ],
+      "rd_type": "show",
+      "has_season_markers": true,
+      "season_only": true
+    },
+    "want_mode": "folder",
+    "want_type": "series",
+    "want_title": "Miami Vice",
+    "want_year": 1984
+  },
+  {
+    "name": "giant-jack-weak-context-unmatched",
+    "input": {
+      "torrent_folder": "Giant.Jack.S01.1080p.NF.WEBRip.DDP5.1.x264-MRCS[eztv.re]",
+      "filenames": [
+        "Giant.Jack.S01E01.Four.Wheels.&.Flies.1080p.NF.WEB-DL.mkv",
+        "Giant.Jack.S01E02.Sleepover.1080p.NF.WEB-DL.mkv"
+      ],
+      "rd_type": "show",
+      "has_season_markers": true
+    },
+    "want_mode": "folder",
+    "want_type": "unmatched"
+  },
+  {
+    "name": "absolute-number-anime-pack",
+    "input": {
+      "torrent_folder": "Chi's Sweet Home - Atarashii Ouchi TV",
+      "filenames": [
+        "[HQR] Chi's Sweet Home - Atarashii Ouchi TV - 001 (D-TX 960x720 h264 AAC).mkv",
+        "[HQR] Chi's Sweet Home - Atarashii Ouchi TV - 104 (D-TX 960x720 h264 AAC).mkv"
+      ],
+      "rd_type": "show"
+    },
+    "want_mode": "folder",
+    "want_type": "anime",
+    "want_title": "Chi's Sweet Home: Atarashii Ouchi",
+    "want_year": 2009
+  },
+  {
+    "name": "anime-pv-pack-folder-match",
+    "input": {
+      "torrent_folder": "[philosophy-raws][Samurai Champloo]",
+      "filenames": [
+        "[philosophy-raws][Samurai Champloo][PV2][BDRemux][H264 FLAC][1920X1080].mkv",
+        "[philosophy-raws][Samurai Champloo][PV3][BDRemux][H264 AC3][1920X1080].mkv",
+        "[philosophy-raws][Samurai Champloo][17][BDRIP][Hi10P FLAC][1920X1080].mkv"
+      ],
+      "rd_type": "show"
+    },
+    "want_mode": "folder",
+    "want_type": "anime",
+    "want_title": "Samurai Champloo",
+    "want_year": 2004
   }
 ]

@@ -10,6 +10,9 @@ type DictionaryConfig struct {
 	TransliterationAliases map[string][]string
 	AnimeKeywords          []string
 	CollectionKeywords     []string
+	SeasonMarkerWords      []string
+	EpisodeRangePatterns   []string
+	QualityTailTokens      []string
 }
 
 // DefaultDictionaries returns dictionary defaults matching the current matcher
@@ -23,18 +26,24 @@ func DefaultDictionaries() DictionaryConfig {
 			"rus", "ru", "russian", "chinese",
 			"jpn", "jp", "japanese", "eng", "english",
 			"multi", "dub", "dubbed", "sub", "subbed",
+			"extended", "cut", "uhd", "hybrid", "remux", "blu", "ray",
 		},
 		TitleAliases:           map[string][]string{},
 		TransliterationAliases: map[string][]string{},
-		AnimeKeywords: []string{
-			"subsplease", "erai-raws", "judas", "ember", "asw",
-			"dkb", "nep_blanc", "lostyears", "akihitosubs",
-			"philosophy-raws", "commie", "coalgirls", "hi10p",
-			"dual audio", "dual-audio", "multi-audio",
-		},
+		AnimeKeywords:          []string{},
 		CollectionKeywords: []string{
 			"collection", "trilogy", "quadrilogy", "saga", "anthology",
-			"complete", "boxset", "box set", "franchise",
+			"boxset", "box set", "franchise",
+		},
+		SeasonMarkerWords: []string{
+			"Season", "Episode", "Сезон", "сезон", "Эпизод", "эпизод",
+		},
+		EpisodeRangePatterns: []string{
+			`~?ep\.?\d+[-–—~]\d+~?`,
+			`\bep\s+\d+\s+\d+\b`,
+		},
+		QualityTailTokens: []string{
+			`UHD`, `SDR`, `HDR\d*`, `Hybrid`, `Remux`, `Extended\s*Cut`, `DV`,
 		},
 	}
 }
@@ -49,6 +58,9 @@ func (cfg *Config) ApplyDictionaries(dict DictionaryConfig) error {
 	cfg.TransliterationAliases = copyAliasMap(dict.TransliterationAliases)
 	cfg.AnimeKeywords = copyStrings(dict.AnimeKeywords)
 	cfg.CollectionKeywords = copyStrings(dict.CollectionKeywords)
+	cfg.SeasonMarkerWords = copyStrings(dict.SeasonMarkerWords)
+	cfg.EpisodeRangePatterns = copyStrings(dict.EpisodeRangePatterns)
+	cfg.QualityTailTokens = copyStrings(dict.QualityTailTokens)
 	return nil
 }
 

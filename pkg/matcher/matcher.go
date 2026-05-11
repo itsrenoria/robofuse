@@ -3,6 +3,7 @@ package matcher
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/robofuse/robofuse/pkg/tmdb"
 	"github.com/robofuse/robofuse/pkg/tvmaze"
@@ -46,42 +47,74 @@ func (m *Matcher) MatchContext(ctx context.Context, input Input) *Result {
 	}
 
 	// 4. Collection detection → per-file mode
-	if m.isCollection(input.TorrentFolder, input.Filenames, input.RDType) {
-		return m.perFileMatch(ctx, input, input.Filenames)
+	packType := m.detectPack(input.TorrentFolder, input.Filenames, input.RDType, input.HasSeasonMarkers)
+	if packType == PackMovies {
+		result := m.perFileMatch(ctx, input, input.Filenames)
+		result.PackType = PackMovies
+		return result
+	}
+
+	// 4.5. Season-only folder (e.g. "Season 1", "Сезон 1") → skip folder-level, go per-file
+	if input.SeasonOnly && len(input.Filenames) > 0 {
+		if match := m.matchSeasonOnlySeries(ctx, input); match != nil {
+			finalType := m.determineType(match, input)
+			return &Result{Mode: "folder", Match: match, Type: finalType, PackType: PackSeries}
+		}
+		return &Result{Mode: "folder", Type: "unmatched", PackType: PackSeries}
 	}
 
 	// 5. Search + score
 	evidence := m.parseEvidence(searchFolder, input)
-	match := m.searchAndScoreEvidence(ctx, evidence, input)
+	match, scored := m.searchEvidenceMatch(ctx, evidence, input)
+	if match != nil && !m.isCorroboratedSeriesPackMatch(match, scored, input) {
+		match = nil
+		scored = nil
+	}
 
 	if match != nil {
 		finalType := m.determineType(match, input)
-		return &Result{Mode: "folder", Match: match, Type: finalType}
+		return &Result{Mode: "folder", Match: match, Type: finalType, PackType: packType}
 	}
 
 	// 6. Retry without year
 	if evidence.Year > 0 {
 		noYear := evidence
 		noYear.Year = 0
-		match = m.searchAndScoreEvidence(ctx, noYear, input)
+		match, scored = m.searchEvidenceMatch(ctx, noYear, input)
+		if match != nil && !m.isCorroboratedSeriesPackMatch(match, scored, input) {
+			match = nil
+			scored = nil
+		}
 	}
 
 	// 7. TVMaze fallback
 	if match == nil {
 		match = m.tvmazeFallback(ctx, evidence, input)
+		if match != nil && !m.isCorroboratedSeriesPackMatch(match, nil, input) {
+			match = nil
+		}
+	}
+
+	if match == nil && len(input.Filenames) > 1 && (input.HasSeasonMarkers || input.RDType == "show" || packType == PackSeries) {
+		match, _ = m.matchSharedSeriesIdentity(ctx, input)
 	}
 
 	if match != nil {
 		finalType := m.determineType(match, input)
-		return &Result{Mode: "folder", Match: match, Type: finalType}
+		return &Result{Mode: "folder", Match: match, Type: finalType, PackType: packType}
 	}
 
 	// 8. No match → per-file fallback for multi-file torrents
 	if len(input.Filenames) > 1 {
-		return m.perFileMatch(ctx, input, input.Filenames)
+		if input.HasSeasonMarkers || input.RDType == "show" || packType == PackSeries {
+			return &Result{Mode: "folder", Type: "unmatched", PackType: PackSeries}
+		}
+		result := m.perFileMatch(ctx, input, input.Filenames)
+		result.PackType = PackMovies
+		return result
 	}
 
-	return &Result{Mode: "folder", Type: "unmatched"}
+	return &Result{Mode: "folder", Type: "unmatched", PackType: packType}
 }
 
 // determineType resolves the final content type from a TMDB match.
@@ -98,16 +131,35 @@ func (m *Matcher) determineType(match *tmdb.MatchResult, input Input) string {
 // perFileMatch matches each file individually against TMDB.
 func (m *Matcher) perFileMatch(ctx context.Context, input Input, filenames []string) *Result {
 	result := &Result{Mode: "per-file", PerFile: make(map[int]*tmdb.MatchResult)}
+
+	prefix := input.TorrentFolder
+	for _, kw := range m.cfg.CollectionKeywords {
+		prefix = strings.ReplaceAll(prefix, kw, "")
+	}
+	prefix = strings.TrimSpace(strings.TrimRight(prefix, ".-_ "))
+
 	for i, fn := range filenames {
 		if ctx.Err() != nil {
 			return result
 		}
-		evidence := m.parseEvidence(fn, input)
-		match := m.searchAndScoreEvidence(ctx, evidence, input)
-		if match == nil && evidence.Year > 0 {
-			noYear := evidence
-			noYear.Year = 0
-			match = m.searchAndScoreEvidence(ctx, noYear, input)
+		var match *tmdb.MatchResult
+		if prefix != "" {
+			prefixedEvidence := m.parseEvidence(prefix+" "+fn, input)
+			match = m.searchAndScoreEvidence(ctx, prefixedEvidence, input)
+			if match == nil && prefixedEvidence.Year > 0 {
+				noYear := prefixedEvidence
+				noYear.Year = 0
+				match = m.searchAndScoreEvidence(ctx, noYear, input)
+			}
+		}
+		if match == nil {
+			evidence := m.parseEvidence(fn, input)
+			match = m.searchAndScoreEvidence(ctx, evidence, input)
+			if match == nil && evidence.Year > 0 {
+				noYear := evidence
+				noYear.Year = 0
+				match = m.searchAndScoreEvidence(ctx, noYear, input)
+			}
 		}
 		if match != nil {
 			result.PerFile[i] = match
@@ -158,7 +210,7 @@ func (m *Matcher) tvmazeFallback(ctx context.Context, evidence parseEvidence, in
 		return nil
 	}
 	res := &tmdb.MatchResult{
-		TMDBID: tvMatch.ID, Title: tvMatch.Name,
+		TVMazeID: tvMatch.ID, Title: tvMatch.Name,
 		Type: "show", Year: tvMatch.Year,
 		Overview: tvMatch.Summary, Source: "tvmaze",
 	}

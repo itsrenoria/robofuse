@@ -1,6 +1,7 @@
 package realdebrid
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,10 @@ import (
 	gourl "net/url"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
+
+	"github.com/sourcegraph/conc/pool"
 
 	"github.com/robofuse/robofuse/internal/request"
 )
@@ -16,7 +21,8 @@ import (
 
 // GetTorrents fetches all torrents with pagination (limit=100 to ensure links are returned)
 // Returns: downloaded torrents, dead torrents, error
-func (c *Client) GetTorrents() ([]*Torrent, []*Torrent, error) {
+func (c *Client) GetTorrents(ctx context.Context) ([]*Torrent, []*Torrent, error) {
+	c.logger.Info().Msg("Fetching torrents...")
 	c.logger.Debug().Msg("Fetching all torrents with pagination...")
 
 	var allTorrents []*Torrent
@@ -25,10 +31,16 @@ func (c *Client) GetTorrents() ([]*Torrent, []*Torrent, error) {
 
 	for {
 		url := fmt.Sprintf("%s/torrents?page=%d&limit=%d", c.Host, page, limit)
-		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("creating torrents request page %d: %w", page, err)
+		}
 
 		resp, err := c.torrentsClient.Do(req)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, nil, ctxErr
+			}
 			return nil, nil, fmt.Errorf("fetching torrents page %d: %w", page, err)
 		}
 
@@ -99,13 +111,72 @@ func (c *Client) GetTorrents() ([]*Torrent, []*Torrent, error) {
 	return downloaded, dead, nil
 }
 
-// GetTorrentInfo fetches detailed info for a specific torrent
-func (c *Client) GetTorrentInfo(torrentID string) (*TorrentInfo, error) {
-	url := fmt.Sprintf("%s/torrents/info/%s", c.Host, torrentID)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
+// PopulateOriginalFilenames fetches /torrents/info/{id} for each torrent
+// to populate the OriginalFilename field with the original torrent name.
+// This provides better folder names (e.g. "Miami.Vice.S01.1080p" instead of
+// "Сезон 1 (1984-1985)").
+func (c *Client) PopulateOriginalFilenames(ctx context.Context, torrents []*Torrent) {
+	c.logger.Info().Int("count", len(torrents)).Msg("Fetching original torrent filenames...")
 
-	resp, err := c.torrentsClient.Do(req)
+	var mu sync.Mutex
+	var completed atomic.Int64
+	concPool := pool.New().WithMaxGoroutines(c.config.ConcurrentRequests)
+
+torrentLoop:
+	for _, t := range torrents {
+		select {
+		case <-ctx.Done():
+			break torrentLoop
+		default:
+		}
+		if t.OriginalFilename != "" {
+			n := completed.Add(1)
+			if n%10 == 0 || int(n) == len(torrents) {
+				c.logger.Debug().Int64("done", n).Int("total", len(torrents)).Msg("Original filenames progress")
+			}
+			continue
+		}
+		t := t
+		concPool.Go(func() {
+			if ctx.Err() != nil {
+				n := completed.Add(1)
+				if n%10 == 0 || int(n) == len(torrents) {
+					c.logger.Debug().Int64("done", n).Int("total", len(torrents)).Msg("Original filenames progress (cancelled)")
+				}
+				return
+			}
+			info, err := c.GetTorrentInfo(ctx, t.ID)
+			if err != nil {
+				c.logger.Debug().Err(err).Str("id", t.ID).Msg("Failed to get torrent info for original filename")
+			} else if info.OriginalFilename != "" {
+				mu.Lock()
+				t.OriginalFilename = info.OriginalFilename
+				mu.Unlock()
+			}
+
+			n := completed.Add(1)
+			if n%10 == 0 || int(n) == len(torrents) {
+				c.logger.Debug().Int64("done", n).Int("total", len(torrents)).Msg("Original filenames progress")
+			}
+		})
+	}
+
+	concPool.Wait()
+}
+
+// GetTorrentInfo fetches detailed info for a specific torrent
+func (c *Client) GetTorrentInfo(ctx context.Context, torrentID string) (*TorrentInfo, error) {
+	url := fmt.Sprintf("%s/torrents/info/%s", c.Host, torrentID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
+		return nil, fmt.Errorf("creating torrent info request: %w", err)
+	}
+
+	resp, err := c.generalClient.Do(req)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("fetching torrent info: %w", err)
 	}
 	defer resp.Body.Close()
@@ -133,7 +204,7 @@ func (c *Client) GetTorrentInfo(torrentID string) (*TorrentInfo, error) {
 }
 
 // AddMagnet adds a magnet link to Real-Debrid
-func (c *Client) AddMagnet(hash string) (string, error) {
+func (c *Client) AddMagnet(ctx context.Context, hash string) (string, error) {
 	magnet := fmt.Sprintf("magnet:?xt=urn:btih:%s", hash)
 
 	url := fmt.Sprintf("%s/torrents/addMagnet", c.Host)
@@ -141,11 +212,17 @@ func (c *Client) AddMagnet(hash string) (string, error) {
 		"magnet": {magnet},
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(payload.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("creating add magnet request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.torrentsClient.Do(req)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		return "", fmt.Errorf("adding magnet: %w", err)
 	}
 	defer resp.Body.Close()
@@ -169,18 +246,24 @@ func (c *Client) AddMagnet(hash string) (string, error) {
 }
 
 // SelectFiles selects files in a torrent for downloading
-func (c *Client) SelectFiles(torrentID string, fileIDs []string) error {
+func (c *Client) SelectFiles(ctx context.Context, torrentID string, fileIDs []string) error {
 	url := fmt.Sprintf("%s/torrents/selectFiles/%s", c.Host, torrentID)
 
 	payload := gourl.Values{
 		"files": {strings.Join(fileIDs, ",")},
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(payload.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload.Encode()))
+	if err != nil {
+		return fmt.Errorf("creating select files request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.torrentsClient.Do(req)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return fmt.Errorf("selecting files: %w", err)
 	}
 	defer resp.Body.Close()
@@ -199,8 +282,8 @@ func (c *Client) SelectFiles(torrentID string, fileIDs []string) error {
 }
 
 // SelectVideoFiles selects only video files (mkv, mp4) from a torrent
-func (c *Client) SelectVideoFiles(torrentID string) (int, error) {
-	info, err := c.GetTorrentInfo(torrentID)
+func (c *Client) SelectVideoFiles(ctx context.Context, torrentID string) (int, error) {
+	info, err := c.GetTorrentInfo(ctx, torrentID)
 	if err != nil {
 		return 0, err
 	}
@@ -220,7 +303,7 @@ func (c *Client) SelectVideoFiles(torrentID string) (int, error) {
 		return 0, fmt.Errorf("no video files found in torrent")
 	}
 
-	if err := c.SelectFiles(torrentID, videoFileIDs); err != nil {
+	if err := c.SelectFiles(ctx, torrentID, videoFileIDs); err != nil {
 		return 0, err
 	}
 
@@ -228,12 +311,18 @@ func (c *Client) SelectVideoFiles(torrentID string) (int, error) {
 }
 
 // DeleteTorrent deletes a torrent from Real-Debrid
-func (c *Client) DeleteTorrent(torrentID string) error {
+func (c *Client) DeleteTorrent(ctx context.Context, torrentID string) error {
 	url := fmt.Sprintf("%s/torrents/delete/%s", c.Host, torrentID)
-	req, _ := http.NewRequest(http.MethodDelete, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("creating delete torrent request: %w", err)
+	}
 
 	resp, err := c.torrentsClient.Do(req)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return fmt.Errorf("deleting torrent: %w", err)
 	}
 	defer resp.Body.Close()
@@ -248,9 +337,13 @@ func (c *Client) DeleteTorrent(torrentID string) error {
 }
 
 // WaitForDownload waits for a torrent to be in "downloaded" status
-func (c *Client) WaitForDownload(torrentID string, maxAttempts int) (*TorrentInfo, error) {
+func (c *Client) WaitForDownload(ctx context.Context, torrentID string, maxAttempts int) (*TorrentInfo, error) {
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		info, err := c.GetTorrentInfo(torrentID)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		info, err := c.GetTorrentInfo(ctx, torrentID)
 		if err != nil {
 			return nil, err
 		}
@@ -260,7 +353,10 @@ func (c *Client) WaitForDownload(torrentID string, maxAttempts int) (*TorrentInf
 			return info, nil
 		case "waiting_files_selection":
 			// Auto-select video files
-			if _, err := c.SelectVideoFiles(torrentID); err != nil {
+			if _, err := c.SelectVideoFiles(ctx, torrentID); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
 				return nil, fmt.Errorf("selecting video files: %w", err)
 			}
 		case "error", "dead", "virus":

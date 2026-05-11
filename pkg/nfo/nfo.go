@@ -70,7 +70,7 @@ type Data struct {
 //
 //	".../Movie (2024).nfo"
 func Write(strmPath string, data *Data) error {
-	if strings.TrimSpace(strmPath) == "" {
+	if strmPath == "" {
 		return fmt.Errorf("strmPath is empty")
 	}
 	if data == nil {
@@ -87,7 +87,25 @@ func Write(strmPath string, data *Data) error {
 		return err
 	}
 
-	return os.WriteFile(nfoPath, xmlContent, 0644)
+	tmpFile, err := os.CreateTemp(filepath.Dir(nfoPath), ".nfo-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(xmlContent); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, nfoPath)
 }
 
 // strmPathToNFOPath replaces the .strm extension with .nfo.
@@ -132,7 +150,7 @@ type xmlEpisode struct {
 
 type xmlUniqueID struct {
 	Type string `xml:"type,attr"`
-	ID   string `xml:",innerxml"`
+	ID   string `xml:",chardata"`
 }
 
 type xmlFileInfo struct {
@@ -198,7 +216,7 @@ func generateXML(data *Data) ([]byte, error) {
 			ep.UniqueIDs = []xmlUniqueID{{Type: "tmdb", ID: fmt.Sprintf("%d", data.TMDBID)}}
 		}
 		body, err = xml.MarshalIndent(ep, "", "  ")
-	default:
+	case "movie":
 		mov := xmlMovie{
 			Title:         data.Title,
 			OriginalTitle: origTitle(data.OriginalTitle, data.Title),
@@ -219,6 +237,8 @@ func generateXML(data *Data) ([]byte, error) {
 			}
 		}
 		body, err = xml.MarshalIndent(mov, "", "  ")
+	default:
+		return nil, fmt.Errorf("unsupported nfo type %q", data.Type)
 	}
 
 	if err != nil {

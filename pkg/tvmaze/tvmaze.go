@@ -59,9 +59,9 @@ type imageInfo struct {
 	Original string `json:"original"`
 }
 
-// SearchShow searches TVMaze by name.
-func (c *Client) SearchShow(name string) (*ShowResult, error) {
-	return c.SearchShowContext(context.Background(), name, 0)
+// SearchShow searches TVMaze by name and optional year.
+func (c *Client) SearchShow(name string, year int) (*ShowResult, error) {
+	return c.SearchShowContext(context.Background(), name, year)
 }
 
 func (c *Client) SearchShowContext(ctx context.Context, name string, year int) (*ShowResult, error) {
@@ -76,23 +76,19 @@ func (c *Client) SearchShowContext(ctx context.Context, name string, year int) (
 		return nil, nil
 	}
 
-	// TODO: year matching requires fetching show details
+	// Score: exact title match → year match → highest score
 	var best *searchResult
-	bestIsExact := false
 	for i := range results {
 		r := &results[i]
-		exact := strings.EqualFold(r.Show.Name, name)
-		if best == nil {
+		if strings.EqualFold(r.Show.Name, name) {
+			// Exact title match
+			if best == nil {
+				best = r
+			}
+			// TODO: year matching requires fetching show details
+		}
+		if best == nil || r.Score > best.Score {
 			best = r
-			bestIsExact = exact
-		} else if bestIsExact && !exact {
-			continue // don't replace exact with non-exact
-		} else if exact && !bestIsExact {
-			best = r
-			bestIsExact = true
-		} else if !exact && r.Score > best.Score {
-			best = r
-			bestIsExact = false
 		}
 	}
 	if best == nil {

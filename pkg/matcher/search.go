@@ -33,6 +33,22 @@ func (m *Matcher) searchAndScoreContext(ctx context.Context, term string, year i
 }
 
 func (m *Matcher) searchAndScoreEvidence(ctx context.Context, ev parseEvidence, input Input) *tmdb.MatchResult {
+	best := m.bestScoredEvidenceMatch(ctx, ev, input)
+	if best == nil {
+		return nil
+	}
+	return m.resolveScoredMatch(ctx, best)
+}
+
+func (m *Matcher) searchEvidenceMatch(ctx context.Context, ev parseEvidence, input Input) (*tmdb.MatchResult, *scoredMatch) {
+	best := m.bestScoredEvidenceMatch(ctx, ev, input)
+	if best == nil {
+		return nil, nil
+	}
+	return m.resolveScoredMatch(ctx, best), best
+}
+
+func (m *Matcher) bestScoredEvidenceMatch(ctx context.Context, ev parseEvidence, input Input) *scoredMatch {
 	if m.tmdb == nil {
 		return nil
 	}
@@ -65,19 +81,29 @@ func (m *Matcher) searchAndScoreEvidence(ctx context.Context, ev parseEvidence, 
 	if best.score < minScore || best.titleScore < 86 {
 		return nil
 	}
-	if len(candidates) > 1 && best.score-candidates[1].score < m.cfg.MinMargin {
+	if len(candidates) > 1 && best.score-candidates[1].score < m.cfg.MinMargin && !isHighConfidenceBest(best, ev) {
+		return nil
+	}
+	return &best
+}
+
+func (m *Matcher) resolveScoredMatch(ctx context.Context, best *scoredMatch) *tmdb.MatchResult {
+	if best == nil || best.match == nil {
 		return nil
 	}
 
-	if best.match.Type == "movie" {
-		if details, err := m.tmdb.GetMovieDetailsContext(ctx, best.match.TMDBID); err == nil && details != nil {
-			return m.movieDetailsToMatch(ctx, details)
+	if match, err := m.tmdb.GetMatchByIDContext(ctx, best.match.TMDBID); err == nil && match != nil {
+		if match.Type == "movie" {
+			if cert := m.tmdb.GetMovieCertificationContext(ctx, best.match.TMDBID); cert != "" {
+				match.ContentRating = cert
+			}
 		}
-	}
-	if best.match.Type == "show" {
-		if details, err := m.tmdb.GetTVDetailsContext(ctx, best.match.TMDBID); err == nil && details != nil {
-			return m.tvDetailsToMatch(ctx, details)
+		if match.Type == "show" {
+			if cert := m.tmdb.GetTVCertificationContext(ctx, best.match.TMDBID); cert != "" {
+				match.ContentRating = cert
+			}
 		}
+		return match
 	}
 	return best.match
 }
@@ -99,39 +125,59 @@ func dedupeCandidates(candidates []scoredMatch) []scoredMatch {
 
 func (m *Matcher) searchType(ctx context.Context, mediaType string, candidate titleCandidate, ev parseEvidence, input Input) []scoredMatch {
 	var out []scoredMatch
-	switch mediaType {
-	case "movie":
-		results, err := m.tmdb.SearchMovieCandidatesContext(ctx, candidate.Title, ev.Year)
-		if err != nil {
-			return nil
+	languages := effectiveSearchLanguages(m.cfg.Languages, candidate.Title, ev.Languages)
+	seen := make(map[int]bool) // deduplicate by TMDB ID across languages
+	for _, lang := range languages {
+		years := []int{ev.Year}
+		if ev.Year > 0 {
+			years = append(years, ev.Year+1)
 		}
-		for _, r := range results {
-			match := &tmdb.MatchResult{
-				TMDBID: r.ID, Title: r.Title, OriginalTitle: r.OriginalTitle,
-				Type: "movie", Year: extractYear(r.ReleaseDate),
-				Overview: r.Overview, PosterPath: r.PosterPath,
-				BackdropPath: r.BackdropPath, VoteAverage: r.VoteAverage,
-				GenreIDs: r.GenreIDs,
+		switch mediaType {
+		case "movie":
+			for _, searchYear := range years {
+				results, err := m.tmdb.SearchMovieCandidatesContext(ctx, candidate.Title, searchYear, lang)
+				if err != nil {
+					continue
+				}
+				for _, r := range results {
+					if seen[r.ID] {
+						continue
+					}
+					match := &tmdb.MatchResult{
+						TMDBID: r.ID, Title: r.Title, OriginalTitle: r.OriginalTitle,
+						Type: "movie", Year: extractYear(r.ReleaseDate),
+						Overview: r.Overview, PosterPath: r.PosterPath,
+						BackdropPath: r.BackdropPath, VoteAverage: r.VoteAverage,
+						GenreIDs: r.GenreIDs,
+					}
+					if scored, ok := m.scoreCandidate(candidate, ev, input, match, r.Popularity); ok {
+						seen[r.ID] = true
+						out = append(out, scored)
+					}
+				}
 			}
-			if scored, ok := m.scoreCandidate(candidate, ev, input, match, r.Popularity); ok {
-				out = append(out, scored)
-			}
-		}
-	case "show":
-		results, err := m.tmdb.SearchTVCandidatesContext(ctx, candidate.Title, ev.Year)
-		if err != nil {
-			return nil
-		}
-		for _, r := range results {
-			match := &tmdb.MatchResult{
-				TMDBID: r.ID, Title: r.Name, OriginalTitle: r.OriginalName,
-				Type: "show", Year: extractYear(r.FirstAirDate),
-				Overview: r.Overview, PosterPath: r.PosterPath,
-				BackdropPath: r.BackdropPath, VoteAverage: r.VoteAverage,
-				GenreIDs: r.GenreIDs,
-			}
-			if scored, ok := m.scoreCandidate(candidate, ev, input, match, r.Popularity); ok {
-				out = append(out, scored)
+		case "show":
+			for _, searchYear := range years {
+				results, err := m.tmdb.SearchTVCandidatesContext(ctx, candidate.Title, searchYear, lang)
+				if err != nil {
+					continue
+				}
+				for _, r := range results {
+					if seen[r.ID] {
+						continue
+					}
+					match := &tmdb.MatchResult{
+						TMDBID: r.ID, Title: r.Name, OriginalTitle: r.OriginalName,
+						Type: "show", Year: extractYear(r.FirstAirDate),
+						Overview: r.Overview, PosterPath: r.PosterPath,
+						BackdropPath: r.BackdropPath, VoteAverage: r.VoteAverage,
+						GenreIDs: r.GenreIDs,
+					}
+					if scored, ok := m.scoreCandidate(candidate, ev, input, match, r.Popularity); ok {
+						seen[r.ID] = true
+						out = append(out, scored)
+					}
+				}
 			}
 		}
 	}
@@ -179,6 +225,16 @@ func (m *Matcher) scoreCandidate(candidate titleCandidate, ev parseEvidence, inp
 	return scoredMatch{match: match, score: score, titleScore: titleScore, candidate: candidate}, true
 }
 
+func isHighConfidenceBest(best scoredMatch, ev parseEvidence) bool {
+	if best.titleScore == 100 && ev.Year > 0 && best.match.Year == ev.Year {
+		return true
+	}
+	if best.titleScore == 100 && best.match.Type == "show" && ev.HasSeasonMarkers && ev.LikelyType == "show" {
+		return true
+	}
+	return false
+}
+
 func titleSimilarity(query, title string) int {
 	q := normalizeTitle(query)
 	t := normalizeTitle(title)
@@ -194,6 +250,9 @@ func titleSimilarity(query, title string) int {
 			short, long = long, short
 		}
 		ratio := float64(short) / float64(long)
+		if strings.HasPrefix(t, q+" ") && len(strings.Fields(q)) >= 2 {
+			return 86
+		}
 		if ratio >= 0.78 {
 			return 94
 		}
@@ -261,12 +320,11 @@ func deleet(s string) string {
 }
 
 func levenshteinSimilarity(a, b string) int {
-	ar := []rune(a)
-	br := []rune(b)
-	dist := levenshteinDist(ar, br)
-	maxLen := len(ar)
-	if len(br) > maxLen {
-		maxLen = len(br)
+	dist := levenshteinDist(a, b)
+	ra, rb := []rune(a), []rune(b)
+	maxLen := len(ra)
+	if len(rb) > maxLen {
+		maxLen = len(rb)
 	}
 	if maxLen == 0 {
 		return 100
@@ -294,8 +352,9 @@ func tokenDice(a, b string) int {
 	return 200 * shared / (len(aTokens) + len(bTokens))
 }
 
-func levenshteinDist(a, b []rune) int {
-	la, lb := len(a), len(b)
+func levenshteinDist(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	la, lb := len(ra), len(rb)
 	d := make([][]int, la+1)
 	for i := range d {
 		d[i] = make([]int, lb+1)
@@ -307,7 +366,7 @@ func levenshteinDist(a, b []rune) int {
 	for i := 1; i <= la; i++ {
 		for j := 1; j <= lb; j++ {
 			cost := 1
-			if a[i-1] == b[j-1] {
+			if ra[i-1] == rb[j-1] {
 				cost = 0
 			}
 			d[i][j] = min(min(d[i-1][j]+1, d[i][j-1]+1), d[i-1][j-1]+cost)
@@ -316,65 +375,69 @@ func levenshteinDist(a, b []rune) int {
 	return d[la][lb]
 }
 
-func (m *Matcher) movieDetailsToMatch(ctx context.Context, d *tmdb.MovieDetails) *tmdb.MatchResult {
-	genres := make([]string, 0, len(d.Genres))
-	genreIDs := make([]int, 0, len(d.Genres))
-	for _, g := range d.Genres {
-		genres = append(genres, g.Name)
-		genreIDs = append(genreIDs, g.ID)
-	}
-	match := &tmdb.MatchResult{
-		TMDBID: d.ID, Title: d.Title, OriginalTitle: d.OriginalTitle,
-		Type: "movie", Year: extractYear(d.ReleaseDate),
-		Overview: d.Overview, PosterPath: tmdb.PosterURL(d.PosterPath),
-		BackdropPath: tmdb.BackdropURL(d.BackdropPath), VoteAverage: d.VoteAverage,
-		Genres: genres, GenreIDs: genreIDs, Runtime: d.Runtime, IMDBID: d.IMDBID,
-		Source: "tmdb",
-	}
-	m.addMovieKeywords(ctx, match)
-	return match
-}
-
-func (m *Matcher) tvDetailsToMatch(ctx context.Context, d *tmdb.TVDetails) *tmdb.MatchResult {
-	genres := make([]string, 0, len(d.Genres))
-	genreIDs := make([]int, 0, len(d.Genres))
-	for _, g := range d.Genres {
-		genres = append(genres, g.Name)
-		genreIDs = append(genreIDs, g.ID)
-	}
-	match := &tmdb.MatchResult{
-		TMDBID: d.ID, Title: d.Name, OriginalTitle: d.OriginalName,
-		Type: "show", Year: extractYear(d.FirstAirDate),
-		Overview: d.Overview, PosterPath: tmdb.PosterURL(d.PosterPath),
-		BackdropPath: tmdb.BackdropURL(d.BackdropPath), VoteAverage: d.VoteAverage,
-		Genres: genres, GenreIDs: genreIDs, Seasons: d.NumberOfSeasons,
-		Source: "tmdb",
-	}
-	m.addTVKeywords(ctx, match)
-	return match
-}
-
-func (m *Matcher) addMovieKeywords(ctx context.Context, match *tmdb.MatchResult) {
-	keywords, err := m.tmdb.GetMovieKeywordsContext(ctx, match.TMDBID)
-	if err != nil {
-		return
-	}
-	match.Keywords = keywords
-	match.IsAnime = tmdb.HasAnimeKeyword(keywords)
-}
-
-func (m *Matcher) addTVKeywords(ctx context.Context, match *tmdb.MatchResult) {
-	keywords, err := m.tmdb.GetTVKeywordsContext(ctx, match.TMDBID)
-	if err != nil {
-		return
-	}
-	match.Keywords = keywords
-	match.IsAnime = tmdb.HasAnimeKeyword(keywords)
-}
-
 func absInt(v int) int {
 	if v < 0 {
 		return -v
 	}
 	return v
+}
+
+// effectiveSearchLanguages returns the ordered list of locales to search.
+// Script-detected language goes first, then evidence language hints (from tokens
+// like "RUS" or script analysis in parseEvidence), then configured languages.
+// Locales missing from config are injected so default EN-only configs can still
+// match Cyrillic/Hangul titles.
+func effectiveSearchLanguages(cfgLanguages []string, candidateTitle string, evHints []string) []string {
+	if len(cfgLanguages) == 0 {
+		cfgLanguages = []string{""}
+	}
+	script := scriptLanguage(candidateTitle)
+	ordered := make([]string, 0, len(cfgLanguages)+len(evHints)+1)
+	seen := map[string]bool{}
+	add := func(lang string) {
+		if lang == "" || seen[lang] {
+			return
+		}
+		seen[lang] = true
+		ordered = append(ordered, lang)
+	}
+	// Script-matched locale is strongest signal — first.
+	add(script)
+	// Evidence language hints from filename tokens / script analysis.
+	for _, h := range evHints {
+		add(h)
+	}
+	// Configured languages in original order.
+	for _, lang := range cfgLanguages {
+		add(lang)
+	}
+	if len(ordered) == 0 {
+		ordered = append(ordered, "")
+	}
+	return ordered
+}
+
+// scriptLanguage detects the likely locale from the script of a candidate title.
+// Returns "" for Latin/ambiguous scripts, "ru" for Cyrillic, "ko" for Hangul.
+// Han (CJK ideographs) is NOT mapped to "ja" or "zh" — script alone is insufficient
+// to distinguish Chinese from Japanese.
+func scriptLanguage(s string) string {
+	var cyr, lat, hangul bool
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Cyrillic, r):
+			cyr = true
+		case unicode.Is(unicode.Latin, r):
+			lat = true
+		case unicode.Is(unicode.Hangul, r):
+			hangul = true
+		}
+	}
+	if cyr && !lat {
+		return "ru"
+	}
+	if hangul {
+		return "ko"
+	}
+	return ""
 }

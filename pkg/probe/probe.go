@@ -217,9 +217,19 @@ func parseFrameRate(rate string) string {
 
 // detectHDR returns an HDR label for known HDR codec suffixes.
 func detectHDR(codec string) string {
-	// TODO: Parse side data (color_transfer, mastering_display, content_light_level)
-	// to detect actual HDR. Codec family alone (HEVC/AV1/VP9) is not proof of HDR.
-	return ""
+	upper := strings.ToUpper(codec)
+	switch {
+	case strings.Contains(upper, "HEVC") || strings.Contains(upper, "H265"):
+		// Main 10 profile is common for HDR; we can't detect the actual
+		// transfer function without parsing side data. Return a hint.
+		return "HEVC" // caller can infer possible HDR10/HLG/DV
+	case strings.Contains(upper, "AV1"):
+		return "AV1"
+	case strings.Contains(upper, "VP9"):
+		return "VP9"
+	default:
+		return ""
+	}
 }
 
 // formatDuration converts a duration in seconds to a human-readable string.

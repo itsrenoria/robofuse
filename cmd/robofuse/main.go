@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
-	"time"
+	"syscall"
 
 	"github.com/robofuse/robofuse/internal/config"
 	"github.com/robofuse/robofuse/internal/health"
@@ -35,28 +38,6 @@ with media players like Infuse, Jellyfin, and Emby.`,
 			if logLevel != "" {
 				logger.SetLogLevel(logLevel)
 			}
-
-			// Only start observability server for operational commands, not
-			// --help/--version/completion. Use a timed select on an error
-			// channel so port-bind failures are caught deterministically.
-			switch cmd.Name() {
-			case "run", "watch", "dry-run":
-				errCh := make(chan error, 1)
-				go func() {
-					mux := http.NewServeMux()
-					mux.Handle("/healthz", health.Handler())
-					mux.Handle("/metrics", metrics.Handler())
-					errCh <- http.ListenAndServe("127.0.0.1:9090", mux)
-				}()
-
-				select {
-				case err := <-errCh:
-					return fmt.Errorf("observability server failed: %w", err)
-				case <-time.After(50 * time.Millisecond):
-					// Server likely started successfully.
-				}
-			}
-
 			return nil
 		},
 	}
@@ -69,6 +50,7 @@ with media players like Infuse, Jellyfin, and Emby.`,
 		Use:   "run",
 		Short: "Run sync once and exit",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			startObservabilityServer()
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
 				return err
@@ -84,6 +66,7 @@ with media players like Infuse, Jellyfin, and Emby.`,
 		Use:   "watch",
 		Short: "Run sync continuously",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			startObservabilityServer()
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
 				return err
@@ -99,6 +82,7 @@ with media players like Infuse, Jellyfin, and Emby.`,
 		Use:   "dry-run",
 		Short: "Preview changes without making them",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			startObservabilityServer()
 			cfg, err := config.Load(cfgPath)
 			if err != nil {
 				return err
@@ -116,6 +100,17 @@ with media players like Infuse, Jellyfin, and Emby.`,
 	}
 }
 
+func startObservabilityServer() {
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/healthz", health.Handler())
+		mux.Handle("/metrics", metrics.Handler())
+		if err := http.ListenAndServe("127.0.0.1:9090", mux); err != nil {
+			fmt.Fprintf(os.Stderr, "Observability server disabled: %v\n", err)
+		}
+	}()
+}
+
 func printBanner() {
 	banner := `
   ██████╗  ██████╗ ██████╗  ██████╗ ███████╗██╗   ██╗███████╗███████╗
@@ -131,57 +126,71 @@ func printBanner() {
 
 func runSync(cfg *config.Config, dryRun bool) {
 	log := logger.Default()
-	service := sync.New(cfg)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	if rebuildOrganized && !dryRun {
 		fmt.Println("Rebuilding organized library from scratch...")
 
-		var allowedBases []string
-		if cwd, err := os.Getwd(); err == nil {
-			allowedBases = append(allowedBases, cwd)
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Printf("WARNING: cannot determine working directory: %v\n", err)
 		}
-		allowedBases = append(allowedBases, "/data", "/config")
+		allowedBases := []string{cwd, "/data", "/config"}
 
-		safeRemoveAll := func(path string) error {
+		safeRemoveAll := func(path string) {
 			if path == "" {
-				return nil
+				return
 			}
 			absPath, err := filepath.Abs(path)
 			if err != nil {
-				return fmt.Errorf("cannot resolve path %s: %w", path, err)
+				fmt.Printf("WARNING: cannot resolve path %s — skipping\n", path)
+				return
 			}
 			ok := false
 			for _, base := range allowedBases {
-				if strings.HasPrefix(absPath, base+string(filepath.Separator)) {
+				resolvedBase, err := filepath.EvalSymlinks(base)
+				if err != nil {
+					continue
+				}
+				rel, err := filepath.Rel(resolvedBase, absPath)
+				if err != nil {
+					continue
+				}
+				if !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
 					ok = true
 					break
 				}
 			}
 			if !ok {
-				return fmt.Errorf("%s is outside safe paths — refusing to delete for safety", absPath)
+				fmt.Printf("WARNING: %s is outside safe paths — skipping rebuild for safety\n", absPath)
+				return
 			}
 			fmt.Printf("  Removing: %s\n", path)
-			if err := os.RemoveAll(path); err != nil {
-				return fmt.Errorf("failed to remove %s: %w", path, err)
-			}
-			return nil
+			os.RemoveAll(path)
 		}
 
-		if err := safeRemoveAll(cfg.OrganizedDir); err != nil {
-			fmt.Fprintf(os.Stderr, "Rebuild error: %v\n", err)
-			os.Exit(1)
-		}
-		if err := safeRemoveAll(cfg.TrackingFile); err != nil {
-			fmt.Fprintf(os.Stderr, "Rebuild error: %v\n", err)
-			os.Exit(1)
-		}
+		safeRemoveAll(cfg.OrganizedDir)
+		safeRemoveAll(cfg.TrackingFile)
 	}
 
-	result, err := service.Run(dryRun)
+	service := sync.New(cfg)
+	result, err := service.Run(ctx, dryRun)
 	if err != nil {
-		log.Error().Err(err).Msg("Sync failed")
-		os.Exit(1)
+		if errors.Is(err, context.Canceled) {
+			fmt.Println("\nShutdown signal received — gracefully stopping...")
+		} else {
+			log.Error().Err(err).Msg("Sync failed")
+		}
+		service.WaitForProbes()
+		log.Info().Msg("Shutdown complete")
+		if !errors.Is(err, context.Canceled) {
+			os.Exit(1)
+		}
+		return
 	}
+	service.WaitForProbes()
+	log.Info().Msg("Shutdown complete")
 
 	summary := sync.FormatSummary(result, sync.SummaryOptions{
 		DryRun:     dryRun,
@@ -192,11 +201,20 @@ func runSync(cfg *config.Config, dryRun bool) {
 
 func runWatch(cfg *config.Config) {
 	log := logger.Default()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
 	service := sync.New(cfg)
-	if err := service.Watch(); err != nil {
+	if err := service.Watch(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Info().Msg("Watch mode shut down gracefully")
+			service.WaitForProbes()
+			return
+		}
 		log.Error().Err(err).Msg("Watch mode failed")
+		service.WaitForProbes()
 		os.Exit(1)
 	}
+	service.WaitForProbes()
 	log.Info().Msg("Watch mode shut down gracefully")
 }

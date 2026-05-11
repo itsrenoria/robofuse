@@ -1,9 +1,11 @@
 package realdebrid
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	gourl "net/url"
 	"strings"
@@ -14,15 +16,14 @@ import (
 
 // unrestrict.go handles link unrestriction and retry behavior.
 
-// UnrestrictLink unrestricts a Real-Debrid link with dual retry strategy
-// - 503 errors: 2 immediate retries with 10s delay, then queue for next cycle
-// - 429 errors: 3 immediate retries with exponential backoff (2s, 4s, 8s)
-// - Other errors: fail immediately
-func (c *Client) UnrestrictLink(link string) (*Download, error) {
+// UnrestrictLink unrestricts a Real-Debrid link with dual retry strategy.
+// The label parameter is a human-readable identifier (e.g. torrent filename)
+// included in log messages for traceability.
+func (c *Client) UnrestrictLink(ctx context.Context, link string, label string) (*Download, error) {
 	const (
-		max503Retries     = 2 // Server error immediate retries
-		max429Retries     = 3 // Rate limit immediate retries
-		retry503Delay     = 10 * time.Second
+		max503Retries     = 3 // Server error immediate retries
+		max429Retries     = 4 // Rate limit immediate retries
+		retry503BaseDelay = 2 * time.Second
 		retry429BaseDelay = 2 * time.Second
 	)
 
@@ -35,11 +36,17 @@ func (c *Client) UnrestrictLink(link string) (*Download, error) {
 			"link": {link},
 		}
 
-		req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(payload.Encode()))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload.Encode()))
+		if err != nil {
+			return nil, fmt.Errorf("creating unrestrict request: %w", err)
+		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 		resp, err := c.generalClient.Do(req)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, fmt.Errorf("unrestricting link: %w", err)
 		}
 
@@ -70,49 +77,90 @@ func (c *Client) UnrestrictLink(link string) (*Download, error) {
 			return result.ToDownload(), nil
 
 		case http.StatusServiceUnavailable:
-			// 503 Server Unavailable - immediate retry with 10s delay
-			attempt503++
-			if attempt503 <= max503Retries {
-				c.logger.Warn().
-					Int("attempt", attempt503).
-					Dur("delay", retry503Delay).
-					Msg("Server unavailable (503), retrying immediately")
-				time.Sleep(retry503Delay)
-				continue // ← Retry immediately
+			// 503 Server Unavailable — try to extract the Real-Debrid error code
+			// from the response body for better diagnostics.
+			var errResp ErrorResponse
+			rdCode := 0
+			rdMsg := ""
+			if err := json.Unmarshal(body, &errResp); err == nil && errResp.ErrorCode != 0 {
+				rdCode = errResp.ErrorCode
+				rdMsg = errResp.Error
 			}
 
-			// Max immediate retries exceeded - return special error for queue
-			c.logger.Warn().
+			attempt503++
+			if attempt503 <= max503Retries {
+				delay := retry503BaseDelay * time.Duration(1<<uint(attempt503-1))
+				jitter := time.Duration(rand.Int63n(int64(delay / 4)))
+				sleepTime := delay + jitter
+				logEvt := c.logger.Warn().
+					Int("attempt", attempt503).
+					Dur("delay", sleepTime).
+					Int("rd_error_code", rdCode).
+					Str("rd_error", rdMsg).
+					Str("rd_reason", rdErrorReason(rdCode, rdMsg))
+				if label != "" {
+					logEvt.Str("label", label)
+				}
+				logEvt.Msg("Server unavailable (503), backing off with jitter")
+				select {
+				case <-time.After(sleepTime):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				continue
+			}
+
+			// Max retries exceeded
+			logEvt := c.logger.Warn().
 				Int("attempts", attempt503).
-				Msg("Server unavailable after immediate retries, will queue for next cycle")
+				Int("rd_error_code", rdCode).
+				Str("rd_error", rdMsg).
+				Str("rd_reason", rdErrorReason(rdCode, rdMsg))
+			if label != "" {
+				logEvt.Str("label", label)
+			}
+			logEvt.Msg("Server unavailable after retries, will queue for next cycle")
 			return nil, &request.HTTPError{
-				StatusCode: http.StatusServiceUnavailable,
-				Message:    "server unavailable after retries",
-				Code:       "server_unavailable_retryable",
+				StatusCode:  http.StatusServiceUnavailable,
+				Message:     fmt.Sprintf("server unavailable (RD code %d: %s)", rdCode, rdMsg),
+				Code:        "server_unavailable_retryable",
+				RDErrorCode: rdCode,
+				RDError:     rdMsg,
 			}
 
 		case http.StatusTooManyRequests:
-			// 429 Rate Limit - immediate retry with exponential backoff
+			// 429 Rate Limit - exponential backoff with jitter, then queue
 			attempt429++
 			if attempt429 <= max429Retries {
-				// Exponential backoff: 2s, 4s, 8s
 				delay := retry429BaseDelay * time.Duration(1<<uint(attempt429-1))
-				c.logger.Warn().
+				jitter := time.Duration(rand.Int63n(int64(delay / 4)))
+				sleepTime := delay + jitter
+				logEvt := c.logger.Warn().
 					Int("attempt", attempt429).
-					Dur("delay", delay).
-					Msg("Rate limit (429), backing off")
-				time.Sleep(delay)
-				continue // ← Retry immediately
+					Dur("delay", sleepTime)
+				if label != "" {
+					logEvt.Str("label", label)
+				}
+				logEvt.Msg("Rate limit (429), backing off with jitter")
+				select {
+				case <-time.After(sleepTime):
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				continue
 			}
 
-			// Max retries exceeded - fail permanently (don't queue)
-			c.logger.Error().
-				Int("attempts", attempt429).
-				Msg("Rate limit exceeded after all retries")
+			// Max retries exceeded - queue for next cycle
+			logEvt := c.logger.Warn().
+				Int("attempts", attempt429)
+			if label != "" {
+				logEvt.Str("label", label)
+			}
+			logEvt.Msg("Rate limit exceeded after retries, will queue for next cycle")
 			return nil, &request.HTTPError{
 				StatusCode: http.StatusTooManyRequests,
-				Message:    "rate limit exceeded",
-				Code:       "rate_limit_exceeded",
+				Message:    "rate limit exceeded after retries",
+				Code:       "rate_limit_retryable",
 			}
 
 		default:
@@ -126,11 +174,20 @@ func (c *Client) UnrestrictLink(link string) (*Download, error) {
 	}
 }
 
-// mapErrorCode maps Real-Debrid error codes to appropriate errors
+// mapErrorCode maps Real-Debrid error codes to appropriate errors.
+// Codes discovered from API responses (verified):
+//
+//	19 – torrent data not cached / file unavailable (transient, common)
+//
+// Codes inherited from original codebase (unverified — may or may not be used by RD):
+//
+//	23, 34, 36 – traffic exceeded
+//	24 – link nerfed / DMCA
+//	35 – hoster unavailable
 func (c *Client) mapErrorCode(code int, message string) error {
 	switch code {
 	case 19:
-		// File has been removed
+		// Hoster is temporarily unavailable (transient)
 		return request.HosterUnavailableError
 	case 23:
 		// Traffic exceeded
@@ -149,19 +206,40 @@ func (c *Client) mapErrorCode(code int, message string) error {
 	}
 }
 
+// rdErrorReason returns a human-readable description of an RD error code.
+// Only code 19 is empirically verified (observed in production).
+// Other codes are inherited from the original codebase and may not be accurate.
+func rdErrorReason(code int, msg string) string {
+	switch code {
+	case 19:
+		return "torrent data not cached (RD can't generate link — re-adding magnet may help)"
+	default:
+		if msg != "" {
+			return msg
+		}
+		return "unknown error code"
+	}
+}
+
 // CheckLink checks if a link is still valid
-func (c *Client) CheckLink(link string) error {
+func (c *Client) CheckLink(ctx context.Context, link string) error {
 	url := fmt.Sprintf("%s/unrestrict/check", c.Host)
 
 	payload := gourl.Values{
 		"link": {link},
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(payload.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload.Encode()))
+	if err != nil {
+		return fmt.Errorf("creating check link request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := c.generalClient.Do(req)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return fmt.Errorf("checking link: %w", err)
 	}
 	defer resp.Body.Close()

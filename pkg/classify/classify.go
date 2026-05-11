@@ -20,9 +20,24 @@ type Result struct {
 	Episode   int
 }
 
+// Hints carries pre-resolved episode identity so downstream code can avoid
+// reparsing weak folder names like "Season 1".
+type Hints struct {
+	Season       int
+	Episode      int
+	EpisodeTitle string
+	ShowTitle    string
+}
+
 // Classify determines whether a file is a movie or TV episode.
-// Priority: RD type → TMDB type → PTT parsing → custom rules.
+// Priority: RD type → TMDB type → stored hints → PTT parsing.
 func Classify(filename, folderName string, rdType, tmdbType string) *Result {
+	return ClassifyWithHints(filename, folderName, rdType, tmdbType, Hints{})
+}
+
+// ClassifyWithHints determines whether a file is a movie or episode while
+// preferring stored episode identity over weak parent-folder reparsing.
+func ClassifyWithHints(filename, folderName string, rdType, tmdbType string, hints Hints) *Result {
 	r := &Result{}
 
 	// Parse with PTT
@@ -31,49 +46,43 @@ func Classify(filename, folderName string, rdType, tmdbType string) *Result {
 	folderBase := filepath.Base(folderName)
 	folderParsed := ptt.Parse(folderBase)
 
-	isSeries := len(parsed.Seasons) > 0 || len(parsed.Episodes) > 0 || parsed.Anime
+	hasHintEpisode := hints.Season > 0 || hints.Episode > 0
+	isSeries := hasHintEpisode || len(parsed.Seasons) > 0 || len(parsed.Episodes) > 0 || parsed.Anime
 	isSeriesFolder := len(folderParsed.Seasons) > 0 || len(folderParsed.Episodes) > 0 || folderParsed.Anime
 
 	if isSeriesFolder {
 		r.Type = "episode"
-		r.ShowTitle = util.FirstNonEmpty(folderParsed.Title, folderBase)
+		r.ShowTitle = util.FirstNonEmpty(hints.ShowTitle, folderParsed.Title, folderBase)
 		r.Year = util.FirstNonZero(folderParsed.Year, parsed.Year)
-		r.Season = firstSeason(parsed.Seasons, folderParsed.Seasons)
-		r.Episode = firstEpisode(parsed.Episodes)
-		r.Title = util.FirstNonEmpty(parsed.Title, filename)
+		r.Season = util.FirstNonZero(hints.Season, firstSeason(parsed.Seasons, folderParsed.Seasons))
+		r.Episode = util.FirstNonZero(hints.Episode, firstEpisode(parsed.Episodes))
+		r.Title = util.FirstNonEmpty(hints.EpisodeTitle, parsed.Title, filename)
 	} else if isSeries {
 		r.Type = "episode"
-		r.ShowTitle = util.FirstNonEmpty(parsed.Title, folderBase)
+		r.ShowTitle = util.FirstNonEmpty(hints.ShowTitle, parsed.Title, folderBase)
 		r.Year = parsed.Year
-		r.Season = firstSeason(parsed.Seasons, nil)
-		r.Episode = firstEpisode(parsed.Episodes)
-		r.Title = util.FirstNonEmpty(parsed.Title, filename)
+		r.Season = util.FirstNonZero(hints.Season, firstSeason(parsed.Seasons, nil))
+		r.Episode = util.FirstNonZero(hints.Episode, firstEpisode(parsed.Episodes))
+		r.Title = util.FirstNonEmpty(hints.EpisodeTitle, parsed.Title, filename)
 	} else {
 		r.Type = "movie"
 		r.Title = util.FirstNonEmpty(parsed.Title, folderParsed.Title, fn)
 		r.Year = util.FirstNonZero(parsed.Year, folderParsed.Year)
 	}
 
-	applyTypeOverride := func(kind string) {
-		switch kind {
-		case "show":
-			r.Type = "episode"
-			r.ShowTitle = util.FirstNonEmpty(r.ShowTitle, parsed.Title, folderParsed.Title, folderBase)
-			r.Title = util.FirstNonEmpty(r.Title, fn)
-		case "movie":
-			r.Type = "movie"
-			r.Title = util.FirstNonEmpty(parsed.Title, folderParsed.Title, fn)
-			r.ShowTitle = ""
-			r.Season = 0
-			r.Episode = 0
-		}
+	// RD override
+	if rdType == "show" {
+		r.Type = "episode"
+	} else if rdType == "movie" {
+		r.Type = "movie"
 	}
 
-	// RD override
-	applyTypeOverride(rdType)
-
 	// TMDB override (highest priority)
-	applyTypeOverride(tmdbType)
+	if tmdbType == "show" {
+		r.Type = "episode"
+	} else if tmdbType == "movie" {
+		r.Type = "movie"
+	}
 
 	return r
 }

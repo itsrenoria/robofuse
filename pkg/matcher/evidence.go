@@ -3,8 +3,12 @@ package matcher
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode"
 )
+
+var subtitleSeparatorRE = regexp.MustCompile(`\s[-–—]\s`)
 
 type parseEvidence struct {
 	Raw              string
@@ -25,18 +29,34 @@ type titleCandidate struct {
 }
 
 func (m *Matcher) parseEvidence(raw string, input Input) parseEvidence {
-	ev := parseEvidence{Raw: raw}
+	// Strip leading bracket groups like [philosophy-raws][Samurai Champloo]
+	cleaned := raw
+	for strings.HasPrefix(cleaned, "[") {
+		close := strings.IndexByte(cleaned, ']')
+		if close < 0 {
+			break
+		}
+		content := cleaned[1:close]
+		shouldStrip := bracketNoiseRE.MatchString("["+content+"]") ||
+			m.isAnimeKeyword(content) ||
+			isLikelyTag(content)
+		if !shouldStrip {
+			break
+		}
+		cleaned = strings.TrimSpace(cleaned[close+1:])
+	}
+	ev := parseEvidence{Raw: cleaned}
 	ev.Year = extractYear(raw)
-	ev.HasSeasonMarkers = input.HasSeasonMarkers || seasonEpisodeRE.MatchString(raw)
+	ev.HasSeasonMarkers = input.HasSeasonMarkers || m.cfg.SeasonMarkerRE.MatchString(raw)
 	ev.IsCollectionPack = m.hasCollectionHint(raw)
-	ev.Languages = languageHints(raw)
+	ev.Languages = m.languageHints(raw)
 	ev.LikelyType = likelyTypeFromEvidence(ev, input)
 
-	normalized := normalizeReleaseString(raw)
+	normalized := m.normalizeReleaseString(cleaned)
 	ev.Normalized = normalized
 	ev.Tokens = strings.Fields(normalized)
 
-	ev.Candidates = m.titleCandidates(raw, normalized, ev.Year)
+	ev.Candidates = m.titleCandidates(cleaned, normalized, ev.Year)
 	return ev
 }
 
@@ -79,45 +99,235 @@ func (m *Matcher) titleCandidates(raw, normalized string, year int) []titleCandi
 			}
 		}
 	}
+	if before, ok := splitBeforeSeasonMarker(raw, m.cfg.SeasonMarkerRE); ok {
+		add(before, 97, "season-prefix")
+		if year > 0 {
+			if withoutYear, ok := splitBeforeYear(before, year); ok {
+				add(withoutYear, 95, "season-prefix-year-split")
+			}
+		}
+		if subtitle := m.searchPhraseCandidate(before, year); subtitle != "" {
+			add(subtitle, 96, "season-prefix-subtitle")
+		}
+		if main := m.mainTitleCandidate(before, year); main != "" {
+			add(main, 93, "season-prefix-main-title")
+		}
+	}
 	if idx := strings.IndexAny(raw, "(["); idx > 2 {
 		add(raw[:idx], 88, "bracket-prefix")
+	}
+	if subtitle := m.searchPhraseCandidate(raw, year); subtitle != "" {
+		add(subtitle, 94, "subtitle-search")
+	}
+	if main := m.mainTitleCandidate(raw, year); main != "" {
+		add(main, 91, "main-title")
 	}
 	add(raw, 82, "raw")
 	baseCandidates := append([]titleCandidate(nil), out...)
 	for _, candidate := range baseCandidates {
+		if trimmed, ok := trimTrailingMediumMarker(candidate.Title); ok {
+			add(trimmed, candidate.Confidence-2, candidate.Source+"-medium-trim")
+		}
 		for _, alias := range m.aliasesForTitle(candidate.Title) {
 			add(alias, candidate.Confidence-2, candidate.Source+"-alias")
+		}
+	}
+	// Latin→Cyrillic transliteration for Latin-only titles (not a hardcoded alias)
+	for _, candidate := range baseCandidates {
+		if cyr := transliterateToCyrillic(candidate.Title); cyr != "" && cyr != candidate.Title {
+			add(cyr, candidate.Confidence-6, candidate.Source+"-translit")
 		}
 	}
 
 	return out
 }
 
-func normalizeReleaseString(raw string) string {
+func trimTrailingMediumMarker(title string) (string, bool) {
+	fields := strings.Fields(title)
+	if len(fields) < 3 {
+		return "", false
+	}
+	last := strings.ToLower(fields[len(fields)-1])
+	switch last {
+	case "tv":
+		return strings.Join(fields[:len(fields)-1], " "), true
+	default:
+		return "", false
+	}
+}
+
+func (m *Matcher) searchPhraseCandidate(raw string, year int) string {
+	if !subtitleSeparatorRE.MatchString(raw) {
+		return ""
+	}
 	s := raw
+	for _, re := range m.cfg.StripPatterns {
+		s = re.ReplaceAllString(s, "")
+	}
+	s = hintRE.ReplaceAllString(s, "")
+	s = bracketNoiseRE.ReplaceAllString(s, " ")
+	s = m.cfg.SeasonMarkerRE.ReplaceAllString(s, " ")
+	s = strings.NewReplacer(".", " ", "_", " ", "~", " ").Replace(s)
+	s = subtitleSeparatorRE.ReplaceAllString(s, ": ")
+	s = m.cfg.QualityTailRE.ReplaceAllString(s, " ")
+	if year > 0 {
+		s = strings.ReplaceAll(s, fmt.Sprintf("%d", year), " ")
+	}
+	s = leadingZeroOrdinalRE.ReplaceAllString(s, " ")
+	s = m.stripNoiseTokens(s)
+	s = leadingNumRE.ReplaceAllString(s, "")
+	s = spaceRE.ReplaceAllString(s, " ")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return s
+}
+
+func (m *Matcher) mainTitleCandidate(raw string, year int) string {
+	parts := subtitleSeparatorRE.Split(raw, 2)
+	if len(parts) < 2 {
+		return ""
+	}
+	main := m.cleanCandidateTitle(parts[0], year)
+	if len([]rune(normalizeTitle(main))) < 3 {
+		return ""
+	}
+	return main
+}
+
+func (m *Matcher) normalizeReleaseString(raw string) string {
+	s := fixMixedCyrillicHomoglyphs(raw)
 	ext := filepath.Ext(s)
 	if ext != "" && len(ext) <= 6 {
 		s = strings.TrimSuffix(s, ext)
 	}
 	s = hintRE.ReplaceAllString(s, "")
 	s = bracketNoiseRE.ReplaceAllString(s, " ")
-	s = strings.NewReplacer(".", " ", "_", " ", "-", " ").Replace(s)
-	s = seasonEpisodeRE.ReplaceAllString(s, " ")
-	s = qualityTailRE.ReplaceAllString(s, " ")
+	// First pass: strip season/ep markers while punctuation is still intact
+	// (episode range patterns like ~ep.1-104~ rely on dots/tildes/dashes)
+	s = m.cfg.SeasonMarkerRE.ReplaceAllString(s, " ")
+	s = strings.NewReplacer(".", " ", "_", " ", "-", " ", "~", " ").Replace(s)
+	// Second pass: strip any remaining season markers after character replacement
+	s = m.cfg.SeasonMarkerRE.ReplaceAllString(s, " ")
+	s = m.cfg.QualityTailRE.ReplaceAllString(s, " ")
 	s = spaceRE.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
 }
 
+func fixMixedCyrillicHomoglyphs(s string) string {
+	replacer := strings.NewReplacer(
+		"A", "А", "a", "а",
+		"B", "В",
+		"C", "С", "c", "с",
+		"E", "Е", "e", "е",
+		"H", "Н",
+		"K", "К",
+		"M", "М",
+		"O", "О", "o", "о",
+		"P", "Р", "p", "р",
+		"T", "Т",
+		"X", "Х", "x", "х",
+		"Y", "У", "y", "у",
+	)
+	var out strings.Builder
+	var token strings.Builder
+	flush := func() {
+		if token.Len() == 0 {
+			return
+		}
+		part := token.String()
+		if containsCyrillic(part) {
+			part = replacer.Replace(part)
+		}
+		out.WriteString(part)
+		token.Reset()
+	}
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			token.WriteRune(r)
+			continue
+		}
+		flush()
+		out.WriteRune(r)
+	}
+	flush()
+	return out.String()
+}
+
+func containsCyrillic(s string) bool {
+	for _, r := range s {
+		if unicode.In(r, unicode.Cyrillic) {
+			return true
+		}
+	}
+	return false
+}
+
+var translitPairs = []struct {
+	lat string
+	cyr string
+}{
+	// Digraphs must come first to match before single chars.
+	{"zh", "ж"}, {"kh", "х"},
+	{"ts", "ц"}, {"ch", "ч"}, {"sh", "ш"},
+	{"ya", "я"}, {"ye", "е"}, {"yo", "ё"}, {"yu", "ю"},
+	{"Zh", "Ж"}, {"Kh", "Х"},
+	{"Ts", "Ц"}, {"Ch", "Ч"}, {"Sh", "Ш"},
+	{"Ya", "Я"}, {"Ye", "Е"}, {"Yo", "Ё"}, {"Yu", "Ю"},
+	{"ZH", "Ж"}, {"KH", "Х"},
+	{"TS", "Ц"}, {"CH", "Ч"}, {"SH", "Ш"},
+	{"YA", "Я"}, {"YE", "Е"}, {"YO", "Ё"}, {"YU", "Ю"},
+	// Single chars.
+	{"a", "а"}, {"b", "б"}, {"c", "ц"}, {"d", "д"}, {"e", "е"},
+	{"f", "ф"}, {"g", "г"}, {"h", "х"}, {"i", "и"}, {"j", "й"},
+	{"k", "к"}, {"l", "л"}, {"m", "м"}, {"n", "н"}, {"o", "о"},
+	{"p", "п"}, {"r", "р"}, {"s", "с"}, {"t", "т"}, {"u", "у"},
+	{"v", "в"}, {"y", "ы"}, {"z", "з"},
+	{"A", "А"}, {"B", "Б"}, {"C", "Ц"}, {"D", "Д"}, {"E", "Е"},
+	{"F", "Ф"}, {"G", "Г"}, {"H", "Х"}, {"I", "И"}, {"J", "Й"},
+	{"K", "К"}, {"L", "Л"}, {"M", "М"}, {"N", "Н"}, {"O", "О"},
+	{"P", "П"}, {"R", "Р"}, {"S", "С"}, {"T", "Т"}, {"U", "У"},
+	{"V", "В"}, {"Y", "Ы"}, {"Z", "З"},
+}
+
+func transliterateToCyrillic(s string) string {
+	if s == "" || containsCyrillic(s) {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		matched := false
+		for _, pair := range translitPairs {
+			if strings.HasPrefix(s[i:], pair.lat) {
+				b.WriteString(pair.cyr)
+				i += len(pair.lat)
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	result := b.String()
+	if result == s {
+		return ""
+	}
+	return result
+}
+
 func (m *Matcher) cleanCandidateTitle(s string, year int) string {
-	s = normalizeReleaseString(s)
 	for _, re := range m.cfg.StripPatterns {
 		s = re.ReplaceAllString(s, "")
 	}
+	s = m.normalizeReleaseString(s)
 	if year > 0 {
-		padded := " " + s + " "
-		padded = strings.Replace(padded, fmt.Sprintf(" %d ", year), " ", 1)
-		s = strings.TrimSpace(padded)
+		s = strings.ReplaceAll(s, fmt.Sprintf("%d", year), " ")
 	}
+	s = leadingZeroOrdinalRE.ReplaceAllString(s, " ")
 	s = m.stripNoiseTokens(s)
 	s = leadingNumRE.ReplaceAllString(s, "")
 	s = spaceRE.ReplaceAllString(s, " ")
@@ -174,10 +384,18 @@ func splitBeforeYear(raw string, year int) (string, bool) {
 	return raw[:idx], true
 }
 
-func languageHints(raw string) []string {
+func splitBeforeSeasonMarker(raw string, seasonRE *regexp.Regexp) (string, bool) {
+	loc := seasonRE.FindStringIndex(raw)
+	if loc == nil || loc[0] <= 1 {
+		return "", false
+	}
+	return raw[:loc[0]], true
+}
+
+func (m *Matcher) languageHints(raw string) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, token := range strings.Fields(normalizeReleaseString(raw)) {
+	for _, token := range strings.Fields(m.normalizeReleaseString(raw)) {
 		switch strings.ToLower(token) {
 		case "rus", "ru", "russian":
 			if !seen["ru"] {
@@ -196,7 +414,25 @@ func languageHints(raw string) []string {
 			}
 		}
 	}
+	// Script-based hint: purely Cyrillic text strongly suggests Russian locale.
+	if !seen["ru"] && containsCyrillic(raw) && !hasSubstantialLatin(raw) {
+		out = append(out, "ru")
+		seen["ru"] = true
+	}
 	return out
+}
+
+func hasSubstantialLatin(s string) bool {
+	count := 0
+	for _, r := range s {
+		if unicode.Is(unicode.Latin, r) {
+			count++
+			if count >= 4 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func likelyTypeFromEvidence(ev parseEvidence, input Input) string {
@@ -207,6 +443,45 @@ func likelyTypeFromEvidence(ev parseEvidence, input Input) string {
 		return "movie"
 	}
 	return ""
+}
+
+func (m *Matcher) isAnimeKeyword(content string) bool {
+	lower := strings.ToLower(content)
+	for _, kw := range m.cfg.AnimeKeywords {
+		kwLower := strings.ToLower(kw)
+		if lower == kwLower || strings.Contains(lower, kwLower) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLikelyTag(content string) bool {
+	if len(content) == 0 {
+		return false
+	}
+	if content[0] == '@' {
+		return true
+	}
+	if !strings.ContainsAny(content, " _") {
+		return true
+	}
+	hasLower := false
+	hasHyphen := false
+	for _, r := range content {
+		if r >= 'a' && r <= 'z' {
+			hasLower = true
+		} else if r == '-' {
+			hasHyphen = true
+		} else if r >= 'A' && r <= 'Z' {
+			return false
+		} else if r >= '0' && r <= '9' {
+			hasLower = true
+		} else {
+			return false
+		}
+	}
+	return hasLower || hasHyphen
 }
 
 func (m *Matcher) hasCollectionHint(raw string) bool {

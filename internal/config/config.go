@@ -58,11 +58,19 @@ type Config struct {
 	MatcherDictionaryDir string            `json:"matcher_dictionary_dir"`
 
 	// TMDB integration
-	TMDBAPIKey string `json:"tmdb_api_key"` // TheMovieDB API v3 key for metadata + renaming
+	TMDBAPIKey             string                 `json:"tmdb_api_key"`              // TheMovieDB API v3 key for metadata + renaming
+	TmdbLanguages          []string               `json:"tmdb_languages"`            // search languages in priority order (default ["en"])
+	MetadataLanguages      []string               `json:"metadata_languages"`        // display metadata languages in priority order (default ["en-US"])
+	MetadataLanguagePolicy MetadataLanguagePolicy `json:"metadata_language_policy"`  // optional display metadata rules by origin
 
 	// Filename templates
 	MovieNameTemplate   string `json:"movie_name_template"`   // e.g. "{title} ({year}) [{resolution} {hdr}]"
 	EpisodeNameTemplate string `json:"episode_name_template"` // e.g. "{title} - S{season:02d}E{episode:02d}"
+
+	// Folder templates
+	MovieFolderTemplate  string `json:"movie_folder_template"`  // e.g. "{title} ({year})"
+	SeriesFolderTemplate string `json:"series_folder_template"` // e.g. "{title} ({year})"
+	SeasonFolderTemplate string `json:"season_folder_template"` // e.g. "Season {season:02d}"
 
 	// Content routing
 	KidsMaxRating string `json:"kids_max_rating"` // e.g. "PG", "TV-Y7" — content at/below this goes to kids folder
@@ -76,11 +84,33 @@ type Config struct {
 	ExcludeKeywords []string `json:"-"` // parsed lowercase keywords from ExcludeKeywordsFile
 }
 
+// MetadataLanguagePolicy controls display metadata localization after a TMDB
+// item has already been matched.
+type MetadataLanguagePolicy struct {
+	Default MetadataLanguagePreference `json:"default"`
+	Rules   []MetadataLanguageRule     `json:"rules"`
+}
+
+// MetadataLanguagePreference describes preferred and fallback display locales.
+type MetadataLanguagePreference struct {
+	Preferred []string `json:"preferred"`
+	Fallback  []string `json:"fallback"`
+}
+
+// MetadataLanguageRule applies display locale overrides to matching items.
+type MetadataLanguageRule struct {
+	Countries         []string `json:"countries"`
+	OriginalLanguages []string `json:"original_languages"`
+	Preferred         []string `json:"preferred"`
+	Fallback          []string `json:"fallback"`
+}
+
 // FolderRule defines a custom routing rule for content placement.
 type FolderRule struct {
 	Pattern  string `json:"pattern"`   // substring or regex match on torrent folder (use ~ prefix for regex)
 	Target   string `json:"target"`    // destination folder (e.g. "X", "Anime", "Documentary")
 	SkipTMDB bool   `json:"skip_tmdb"` // skip TMDB matching for this folder
+	Adult    bool   `json:"adult"`     // route this content to adult section
 }
 
 // MatchingConfig holds configuration for the TMDB matching pipeline.
@@ -89,16 +119,23 @@ type MatchingConfig struct {
 	AnimeKeywords      []string          `json:"anime_keywords"`       // substring patterns indicating anime
 	CollectionKeywords []string          `json:"collection_keywords"`  // folder patterns indicating a movie collection
 	ForceMoviePatterns []string          `json:"force_movie_patterns"` // filename patterns that force movie classification
+	MinScore           int               `json:"min_score"`            // minimum score required when a year is present
+	MinScoreNoYear     int               `json:"min_score_no_year"`    // minimum score required when no year is present
+	MinMargin          int               `json:"min_margin"`           // minimum lead over runner-up unless very high confidence
 	TitleOverrides     map[string]string `json:"title_overrides"`      // folder → TMDB search title (empty/"" = skip folder-level)
 	TypeOverrides      map[string]string `json:"type_overrides"`       // folder → forced type ("movie" or "show")
 
-	NoiseTokens            []string          `json:"-"`
-	TitleAliases           map[string]string `json:"-"`
-	TransliterationAliases map[string]string `json:"-"`
+	NoiseTokens            []string            `json:"-"`
+	TitleAliases           map[string][]string `json:"-"`
+	TransliterationAliases map[string][]string `json:"-"`
+	SeasonMarkerWords      []string            `json:"-"`
+	EpisodeRangePatterns   []string            `json:"-"`
+	QualityTailTokens      []string            `json:"-"`
 }
 
 // ToMatcherConfig converts matching config to the matcher package format.
-func (m MatchingConfig) ToMatcherConfig() *matcher.Config {
+// languages is the TMDB search language priority list from Config.TmdbLanguages.
+func (m MatchingConfig) ToMatcherConfig(languages []string) *matcher.Config {
 	compile := func(patterns []string) []*regexp.Regexp {
 		out := make([]*regexp.Regexp, 0, len(patterns))
 		for _, p := range patterns {
@@ -110,26 +147,75 @@ func (m MatchingConfig) ToMatcherConfig() *matcher.Config {
 	}
 	def := matcher.DefaultConfig()
 	cfg := &matcher.Config{
-		StripPatterns:      def.StripPatterns,
-		AnimeKeywords:      def.AnimeKeywords,
-		CollectionKeywords: def.CollectionKeywords,
-		ForceMoviePatterns: def.ForceMoviePatterns,
-		MinScore:           def.MinScore,
-		MinScoreNoYear:     def.MinScoreNoYear,
-		MinMargin:          def.MinMargin,
+		Languages: languages,
 	}
-	if len(m.StripPatterns) > 0 {
-		cfg.StripPatterns = append(cfg.StripPatterns, compile(m.StripPatterns)...)
+	if m.StripPatterns != nil {
+		cfg.StripPatterns = compile(m.StripPatterns)
+	} else {
+		cfg.StripPatterns = def.StripPatterns
 	}
-	if len(m.AnimeKeywords) > 0 {
-		cfg.AnimeKeywords = m.AnimeKeywords
+	if m.AnimeKeywords != nil {
+		cfg.AnimeKeywords = append([]string(nil), m.AnimeKeywords...)
+	} else {
+		cfg.AnimeKeywords = append([]string(nil), def.AnimeKeywords...)
 	}
-	if len(m.CollectionKeywords) > 0 {
-		cfg.CollectionKeywords = m.CollectionKeywords
+	if m.CollectionKeywords != nil {
+		cfg.CollectionKeywords = append([]string(nil), m.CollectionKeywords...)
+	} else {
+		cfg.CollectionKeywords = append([]string(nil), def.CollectionKeywords...)
 	}
-	if len(m.ForceMoviePatterns) > 0 {
+	if m.ForceMoviePatterns != nil {
 		cfg.ForceMoviePatterns = compile(m.ForceMoviePatterns)
+	} else {
+		cfg.ForceMoviePatterns = def.ForceMoviePatterns
 	}
+	if m.TitleAliases != nil {
+		cfg.TitleAliases = m.TitleAliases
+	} else {
+		cfg.TitleAliases = def.TitleAliases
+	}
+	if m.TransliterationAliases != nil {
+		cfg.TransliterationAliases = m.TransliterationAliases
+	} else {
+		cfg.TransliterationAliases = def.TransliterationAliases
+	}
+	if m.NoiseTokens != nil {
+		cfg.NoiseTokens = append([]string(nil), m.NoiseTokens...)
+	} else {
+		cfg.NoiseTokens = append([]string(nil), def.NoiseTokens...)
+	}
+	if m.SeasonMarkerWords != nil {
+		cfg.SeasonMarkerWords = append([]string(nil), m.SeasonMarkerWords...)
+	} else {
+		cfg.SeasonMarkerWords = append([]string(nil), def.SeasonMarkerWords...)
+	}
+	if m.EpisodeRangePatterns != nil {
+		cfg.EpisodeRangePatterns = append([]string(nil), m.EpisodeRangePatterns...)
+	} else {
+		cfg.EpisodeRangePatterns = append([]string(nil), def.EpisodeRangePatterns...)
+	}
+	if m.QualityTailTokens != nil {
+		cfg.QualityTailTokens = append([]string(nil), m.QualityTailTokens...)
+	} else {
+		cfg.QualityTailTokens = append([]string(nil), def.QualityTailTokens...)
+	}
+	if m.MinScore > 0 {
+		cfg.MinScore = m.MinScore
+	} else {
+		cfg.MinScore = def.MinScore
+	}
+	if m.MinScoreNoYear > 0 {
+		cfg.MinScoreNoYear = m.MinScoreNoYear
+	} else {
+		cfg.MinScoreNoYear = def.MinScoreNoYear
+	}
+	if m.MinMargin > 0 {
+		cfg.MinMargin = m.MinMargin
+	} else {
+		cfg.MinMargin = def.MinMargin
+	}
+	cfg.SeasonMarkerRE = matcher.BuildSeasonEpisodeRE(cfg.SeasonMarkerWords, cfg.EpisodeRangePatterns)
+	cfg.QualityTailRE = matcher.BuildQualityTailRE(cfg.QualityTailTokens)
 	return cfg
 }
 
@@ -156,6 +242,9 @@ func defaults() *Config {
 		RetryQueueFile:   "./cache/retry_queue.json",
 		MaxRetryAttempts: 3,
 
+		TmdbLanguages:     []string{"en"},
+		MetadataLanguages: []string{"en-US"},
+
 		EnableFFProbe:   false,
 		FFProbePath:     "ffprobe",
 		FFProbeTimeout:  15,
@@ -172,6 +261,7 @@ func defaults() *Config {
 				`\bHDTV\b`, `\bDVDRip\b`, `\bHDRip\b`,
 				`\bNNMClub\b`, `\bRutracker\b`,
 				`\b(AMZN|NF|DSNP|HMAX|ATVP|PMTP)\b`,
+				`www\.\S+\.\S+\s*[-–—]\s*`,
 			},
 			AnimeKeywords: []string{
 				"subsplease", "erai-raws", "judas", "ember", "asw",
@@ -181,6 +271,9 @@ func defaults() *Config {
 			},
 			CollectionKeywords: []string{"collection", "anthology", "complete series", "saga"},
 			ForceMoviePatterns: []string{`^\d+\.`},
+			MinScore:           matcher.DefaultConfig().MinScore,
+			MinScoreNoYear:     matcher.DefaultConfig().MinScoreNoYear,
+			MinMargin:          matcher.DefaultConfig().MinMargin,
 			TitleOverrides:     map[string]string{},
 			TypeOverrides:      map[string]string{},
 		},
@@ -193,21 +286,16 @@ func defaults() *Config {
 func Load(configPath string) (*Config, error) {
 	cfg := defaults()
 
-	// Build search path list. ROBOFUSE_CONFIG env var wins over the
-	// passed configPath when set (checked first).
+	// Try to find config file — ROBOFUSE_CONFIG env var takes priority
+	// over the default search paths.
 	envConfigPath := os.Getenv("ROBOFUSE_CONFIG")
-	paths := []string{}
-	if envConfigPath != "" {
-		paths = append(paths, envConfigPath)
-	}
-	if configPath != "" {
-		paths = append(paths, configPath)
-	}
-	paths = append(paths,
+	paths := []string{
+		configPath,
+		envConfigPath,
 		"config.json",
 		"/data/config.json",
 		filepath.Join(os.Getenv("HOME"), ".config/robofuse/config.json"),
-	)
+	}
 
 	var configFile string
 	for _, p := range paths {
@@ -247,9 +335,8 @@ func Load(configPath string) (*Config, error) {
 
 	// Apply environment variable overrides (ROBOFUSE_*).
 	// These take precedence over file-based values.
-	if err := cfg.applyEnvOverrides(); err != nil {
-		return nil, err
-	}
+	cfg.applyEnvOverrides()
+	cfg.normalize()
 
 	if err := cfg.loadMatcherDictionaries(); err != nil {
 		return nil, err
@@ -304,15 +391,8 @@ func (c *Config) Validate() error {
 	if c.MinFileSizeMB < 0 {
 		return fmt.Errorf("min_file_size_mb must be >= 0")
 	}
-
-	// Validate folder rule regex patterns at startup so malformed
-	// patterns fail fast rather than being silently dropped at runtime.
-	for i, r := range c.FolderRules {
-		if strings.HasPrefix(r.Pattern, "~") {
-			if _, err := regexp.Compile(r.Pattern[1:]); err != nil {
-				return fmt.Errorf("folder_rules[%d] pattern %q: invalid regex: %w", i, r.Pattern, err)
-			}
-		}
+	if len(c.MetadataLanguages) == 0 {
+		return fmt.Errorf("metadata_languages must contain at least one language")
 	}
 
 	return nil
@@ -346,9 +426,6 @@ func (c *Config) MatchFolderRule(folderName string) *FolderRule {
 
 // IsAdultFolder returns true if the folder name matches any adult pattern
 // (from adult_patterns config or folder_rules with skip_tmdb).
-//
-// TODO(Phase 3): Add an explicit Adult bool to FolderRule and use it here
-// instead of inferring adult classification from SkipTMDB.
 func (c *Config) IsAdultFolder(folderName string) bool {
 	// Check deprecated adult_patterns
 	for _, p := range c.AdultPatterns {
@@ -356,9 +433,21 @@ func (c *Config) IsAdultFolder(folderName string) bool {
 			return true
 		}
 	}
-	// Check folder_rules with skip_tmdb (Phase 3 will replace with r.Adult)
-	if r := c.MatchFolderRule(folderName); r != nil && r.SkipTMDB {
-		return true
+	// Check all folder_rules with explicit adult flag
+	lower := strings.ToLower(folderName)
+	for i := range c.FolderRules {
+		r := &c.FolderRules[i]
+		if !r.Adult || r.Pattern == "" {
+			continue
+		}
+		if strings.HasPrefix(r.Pattern, "~") {
+			re, err := regexp.Compile(r.Pattern[1:])
+			if err == nil && re.MatchString(folderName) {
+				return true
+			}
+		} else if strings.Contains(lower, strings.ToLower(r.Pattern)) {
+			return true
+		}
 	}
 	return false
 }
@@ -412,34 +501,27 @@ func (c *Config) loadExcludeKeywords() error {
 
 // applyEnvOverrides applies ROBOFUSE_* environment variables on top of the
 // file-loaded config. Only set (non-empty) variables override; unset variables
-// leave the existing value untouched. Returns an error if an env var has an
-// invalid value (e.g. non-numeric ROBOFUSE_CONCURRENT_REQUESTS).
-func (c *Config) applyEnvOverrides() error {
+// leave the existing value untouched.
+func (c *Config) applyEnvOverrides() {
 	// Helper closures to keep the code compact.
 	envStr := func(key string, target *string) {
 		if v := os.Getenv(key); v != "" {
 			*target = v
 		}
 	}
-	envInt := func(key string, target *int) error {
+	envInt := func(key string, target *int) {
 		if v := os.Getenv(key); v != "" {
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return fmt.Errorf("invalid value for %s: %q (expected integer)", key, v)
+			if n, err := strconv.Atoi(v); err == nil {
+				*target = n
 			}
-			*target = n
 		}
-		return nil
 	}
-	envBool := func(key string, target *bool) error {
+	envBool := func(key string, target *bool) {
 		if v := os.Getenv(key); v != "" {
-			b, err := strconv.ParseBool(v)
-			if err != nil {
-				return fmt.Errorf("invalid value for %s: %q (expected boolean)", key, v)
+			if b, err := strconv.ParseBool(v); err == nil {
+				*target = b
 			}
-			*target = b
 		}
-		return nil
 	}
 
 	// Core settings
@@ -447,78 +529,207 @@ func (c *Config) applyEnvOverrides() error {
 	envStr("ROBOFUSE_OUTPUT_DIR", &c.OutputDir)
 	envStr("ROBOFUSE_ORGANIZED_DIR", &c.OrganizedDir)
 	envStr("ROBOFUSE_CACHE_DIR", &c.CacheDir)
-	if err := envInt("ROBOFUSE_CONCURRENT_REQUESTS", &c.ConcurrentRequests); err != nil {
-		return err
-	}
-	if err := envInt("ROBOFUSE_GENERAL_RATE_LIMIT", &c.GeneralRateLimit); err != nil {
-		return err
-	}
-	if err := envInt("ROBOFUSE_TORRENTS_RATE_LIMIT", &c.TorrentsRateLimit); err != nil {
-		return err
-	}
-	if err := envBool("ROBOFUSE_WATCH_MODE", &c.WatchMode); err != nil {
-		return err
-	}
-	if err := envInt("ROBOFUSE_WATCH_MODE_INTERVAL", &c.WatchModeInterval); err != nil {
-		return err
-	}
-	if err := envBool("ROBOFUSE_REPAIR_TORRENTS", &c.RepairTorrents); err != nil {
-		return err
-	}
-	if err := envInt("ROBOFUSE_MIN_FILE_SIZE_MB", &c.MinFileSizeMB); err != nil {
-		return err
-	}
+	envInt("ROBOFUSE_CONCURRENT_REQUESTS", &c.ConcurrentRequests)
+	envInt("ROBOFUSE_GENERAL_RATE_LIMIT", &c.GeneralRateLimit)
+	envInt("ROBOFUSE_TORRENTS_RATE_LIMIT", &c.TorrentsRateLimit)
+	envBool("ROBOFUSE_WATCH_MODE", &c.WatchMode)
+	envInt("ROBOFUSE_WATCH_MODE_INTERVAL", &c.WatchModeInterval)
+	envBool("ROBOFUSE_REPAIR_TORRENTS", &c.RepairTorrents)
+	envInt("ROBOFUSE_MIN_FILE_SIZE_MB", &c.MinFileSizeMB)
 	envStr("ROBOFUSE_LOG_LEVEL", &c.LogLevel)
-	if err := envBool("ROBOFUSE_PTT_RENAME", &c.PttRename); err != nil {
-		return err
-	}
+	envBool("ROBOFUSE_PTT_RENAME", &c.PttRename)
 	envStr("ROBOFUSE_EXCLUDE_KEYWORDS_FILE", &c.ExcludeKeywordsFile)
 	envStr("ROBOFUSE_MATCHER_DICTIONARY_DIR", &c.MatcherDictionaryDir)
 
+	// TMDB
+	envStr("ROBOFUSE_TMDB_API_KEY", &c.TMDBAPIKey)
+	if v := os.Getenv("ROBOFUSE_TMDB_LANGUAGES"); v != "" {
+		c.TmdbLanguages = strings.Split(v, ",")
+	}
+	if v := os.Getenv("ROBOFUSE_METADATA_LANGUAGES"); v != "" {
+		c.MetadataLanguages = strings.Split(v, ",")
+	}
+
 	// Tracking
 	envStr("ROBOFUSE_TRACKING_FILE", &c.TrackingFile)
-	if err := envInt("ROBOFUSE_FILE_EXPIRY_DAYS", &c.FileExpiryDays); err != nil {
-		return err
-	}
+	envInt("ROBOFUSE_FILE_EXPIRY_DAYS", &c.FileExpiryDays)
 
 	// Retry queue
 	envStr("ROBOFUSE_RETRY_QUEUE_FILE", &c.RetryQueueFile)
-	if err := envInt("ROBOFUSE_MAX_RETRY_ATTEMPTS", &c.MaxRetryAttempts); err != nil {
-		return err
-	}
+	envInt("ROBOFUSE_MAX_RETRY_ATTEMPTS", &c.MaxRetryAttempts)
 
 	// ffprobe
-	if err := envBool("ROBOFUSE_ENABLE_FFPROBE", &c.EnableFFProbe); err != nil {
-		return err
-	}
+	envBool("ROBOFUSE_ENABLE_FFPROBE", &c.EnableFFProbe)
 	envStr("ROBOFUSE_FFPROBE_PATH", &c.FFProbePath)
-	if err := envInt("ROBOFUSE_FFPROBE_TIMEOUT", &c.FFProbeTimeout); err != nil {
-		return err
-	}
-	if err := envInt("ROBOFUSE_PROBE_MAX_RETRIES", &c.ProbeMaxRetries); err != nil {
-		return err
-	}
-	if err := envBool("ROBOFUSE_STORE_RAW_FFPROBE", &c.StoreRawProbe); err != nil {
-		return err
-	}
-
-	// TMDB / metadata
-	envStr("ROBOFUSE_TMDB_API_KEY", &c.TMDBAPIKey)
-
-	// Filename templates
-	envStr("ROBOFUSE_MOVIE_NAME_TEMPLATE", &c.MovieNameTemplate)
-	envStr("ROBOFUSE_EPISODE_NAME_TEMPLATE", &c.EpisodeNameTemplate)
+	envInt("ROBOFUSE_FFPROBE_TIMEOUT", &c.FFProbeTimeout)
+	envInt("ROBOFUSE_PROBE_MAX_RETRIES", &c.ProbeMaxRetries)
+	envBool("ROBOFUSE_STORE_RAW_FFPROBE", &c.StoreRawProbe)
 
 	// Content routing
-	envStr("ROBOFUSE_KIDS_MAX_RATING", &c.KidsMaxRating)
 	envStr("ROBOFUSE_KIDS_FOLDER", &c.KidsFolder)
 	envStr("ROBOFUSE_ANIME_FOLDER", &c.AnimeFolder)
 	envStr("ROBOFUSE_MOVIE_FOLDER", &c.MovieFolder)
 	envStr("ROBOFUSE_SERIES_FOLDER", &c.SeriesFolder)
 
-	// Note: compound types (FolderRules, TitleOverrides, Matching,
-	// AdultPatterns) are not currently overridable via environment variables.
-	// Use the config file for these settings.
+	// Templates
+	envStr("ROBOFUSE_MOVIE_NAME_TEMPLATE", &c.MovieNameTemplate)
+	envStr("ROBOFUSE_EPISODE_NAME_TEMPLATE", &c.EpisodeNameTemplate)
+	envStr("ROBOFUSE_MOVIE_FOLDER_TEMPLATE", &c.MovieFolderTemplate)
+	envStr("ROBOFUSE_SERIES_FOLDER_TEMPLATE", &c.SeriesFolderTemplate)
+	envStr("ROBOFUSE_SEASON_FOLDER_TEMPLATE", &c.SeasonFolderTemplate)
+}
 
-	return nil
+func (c *Config) normalize() {
+	c.TmdbLanguages = normalizeLanguageList(c.TmdbLanguages, []string{"en"})
+	c.MetadataLanguages = normalizeLanguageList(c.MetadataLanguages, []string{"en-US"})
+	c.MetadataLanguagePolicy.Default.Preferred = normalizeLanguageList(c.MetadataLanguagePolicy.Default.Preferred, nil)
+	c.MetadataLanguagePolicy.Default.Fallback = normalizeLanguageList(c.MetadataLanguagePolicy.Default.Fallback, nil)
+	for i := range c.MetadataLanguagePolicy.Rules {
+		rule := &c.MetadataLanguagePolicy.Rules[i]
+		rule.Countries = normalizeCountryList(rule.Countries)
+		rule.OriginalLanguages = normalizeBaseLanguageList(rule.OriginalLanguages)
+		rule.Preferred = normalizeLanguageList(rule.Preferred, nil)
+		rule.Fallback = normalizeLanguageList(rule.Fallback, nil)
+	}
+}
+
+// ResolveMetadataLanguages returns the display metadata locales to try for a
+// matched TMDB item. Search-language behavior stays in TmdbLanguages.
+func (c *Config) ResolveMetadataLanguages(originalLanguage string, countries []string) []string {
+	originalLanguage = normalizeBaseLanguage(originalLanguage)
+	countries = normalizeCountryList(countries)
+
+	preferred := append([]string(nil), c.MetadataLanguages...)
+	if len(c.MetadataLanguagePolicy.Default.Preferred) > 0 {
+		preferred = append(append([]string(nil), c.MetadataLanguagePolicy.Default.Preferred...), preferred...)
+	}
+
+	fallback := append([]string(nil), c.MetadataLanguagePolicy.Default.Fallback...)
+	for _, rule := range c.MetadataLanguagePolicy.Rules {
+		if !metadataLanguageRuleMatches(rule, originalLanguage, countries) {
+			continue
+		}
+		if len(rule.Preferred) > 0 {
+			preferred = append(append([]string(nil), rule.Preferred...), preferred...)
+		}
+		if len(rule.Fallback) > 0 {
+			fallback = append(append([]string(nil), rule.Fallback...), fallback...)
+		}
+	}
+
+	return uniqueStrings(append(preferred, fallback...))
+}
+
+func metadataLanguageRuleMatches(rule MetadataLanguageRule, originalLanguage string, countries []string) bool {
+	if len(rule.Countries) == 0 && len(rule.OriginalLanguages) == 0 {
+		return false
+	}
+	if len(rule.Countries) > 0 && !containsAnyFold(countries, rule.Countries) {
+		return false
+	}
+	if len(rule.OriginalLanguages) > 0 && !containsFold(rule.OriginalLanguages, originalLanguage) {
+		return false
+	}
+	return true
+}
+
+func normalizeLanguageList(values, fallback []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if normalized := normalizeLocale(value); normalized != "" {
+			out = append(out, normalized)
+		}
+	}
+	if len(out) == 0 && len(fallback) > 0 {
+		return append([]string(nil), fallback...)
+	}
+	return uniqueStrings(out)
+}
+
+func normalizeBaseLanguageList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if normalized := normalizeBaseLanguage(value); normalized != "" {
+			out = append(out, normalized)
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func normalizeCountryList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		out = append(out, strings.ToUpper(strings.ReplaceAll(value, "_", "-")))
+	}
+	return uniqueStrings(out)
+}
+
+func normalizeLocale(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "_", "-"))
+	if value == "" {
+		return ""
+	}
+	parts := strings.Split(value, "-")
+	if len(parts) == 1 {
+		return strings.ToLower(parts[0])
+	}
+	parts[0] = strings.ToLower(parts[0])
+	parts[1] = strings.ToUpper(parts[1])
+	for i := 2; i < len(parts); i++ {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return strings.Join(parts, "-")
+}
+
+func normalizeBaseLanguage(value string) string {
+	value = normalizeLocale(value)
+	if value == "" {
+		return ""
+	}
+	if idx := strings.IndexByte(value, '-'); idx >= 0 {
+		return value[:idx]
+	}
+	return value
+}
+
+func containsAnyFold(haystack, needles []string) bool {
+	for _, needle := range needles {
+		if containsFold(haystack, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsFold(values []string, needle string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

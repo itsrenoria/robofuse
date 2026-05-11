@@ -25,6 +25,7 @@ type goldenInput struct {
 	Filenames        []string `json:"filenames"`
 	RDType           string   `json:"rd_type"`
 	HasSeasonMarkers bool     `json:"has_season_markers"`
+	SeasonOnly       bool     `json:"season_only"`
 }
 
 func TestGoldenMatcherDecisionsOffline(t *testing.T) {
@@ -41,6 +42,7 @@ func TestGoldenMatcherDecisionsOffline(t *testing.T) {
 				Filenames:        tc.In.Filenames,
 				RDType:           tc.In.RDType,
 				HasSeasonMarkers: tc.In.HasSeasonMarkers,
+				SeasonOnly:       tc.In.SeasonOnly,
 			})
 			if got == nil {
 				t.Fatal("Match returned nil")
@@ -71,6 +73,9 @@ func TestGoldenMatcherDecisionsOffline(t *testing.T) {
 				i, err := strconv.Atoi(idx)
 				if err != nil {
 					t.Fatalf("bad per-file index %q in golden case: %v", idx, err)
+				}
+				if i >= len(got.PerFile) {
+					t.Fatalf("per-file index %d out of range (len=%d), want %q", i, len(got.PerFile), wantTitle)
 				}
 				match := got.PerFile[i]
 				if match == nil {
