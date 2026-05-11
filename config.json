@@ -1,19 +1,66 @@
 {
+  "_comment": "robofuse example configuration — not exhaustive; see Config struct for all available keys",
   "token": "YOUR_RD_API_TOKEN",
+
+  "_directories": "Output and cache directories",
   "output_dir": "./library",
   "organized_dir": "./library-organized",
   "cache_dir": "./cache",
+
+  "_concurrency": "API rate limits and worker settings",
+  "concurrent_requests": 10,
+  "general_rate_limit": 60,
+  "torrents_rate_limit": 25,
+
+  "_watch_mode": "Continuous background sync",
+  "watch_mode": false,
+  "watch_mode_interval": 60,
+
+  "_features": "Feature toggles",
+  "repair_torrents": true,
+  "min_file_size_mb": 150,
+  "ptt_rename": true,
+  "log_level": "info",
+
+  "_tracking": "File tracking and link expiry",
   "tracking_file": "./cache/file_tracking.json",
   "file_expiry_days": 6,
   "retry_queue_file": "./cache/retry_queue.json",
   "max_retry_attempts": 3,
-  "concurrent_requests": 50,
-  "general_rate_limit": 250,
-  "torrents_rate_limit": 25,
-  "watch_mode": false,
-  "watch_mode_interval": 60,
-  "repair_torrents": true,
-  "min_file_size_mb": 150,
-  "ptt_rename": true,
-  "log_level": "info"
+
+  "_ffprobe": "Media stream probing (optional, requires ffprobe installed)",
+  "enable_ffprobe": false,
+  "ffprobe_path": "ffprobe",
+  "ffprobe_timeout": 15,
+
+  "_tmdb": "TheMovieDB integration (optional, get key at themoviedb.org)",
+  "tmdb_api_key": "",
+
+  "_filename_templates": "Custom filename formatting. Leave empty for defaults.",
+  "movie_name_template": "",
+  "episode_name_template": "",
+
+  "_templates_example": "Example templates (showing what's possible):",
+  "_movie_example": "{title} ({year}) [{resolution} {hdr} {bitrate}] [{audio_langs}][{sub_langs}]",
+  "_episode_example": "{title} - S{season:02d}E{episode:02d} - {episode_title} [{resolution} {hdr}] [{audio_langs}][{sub_langs}]",
+
+  "_routing": "Custom folder routing rules",
+  "folder_rules": [
+  ],
+
+  "_routing_example": "Example: route adult content to X/ folder, skip TMDB",
+  "_routing_example_item": {"pattern": "Viv Thomas", "target": "X", "skip_tmdb": true},
+
+  "_adult_patterns_deprecated": "Deprecated — use folder_rules instead",
+  "adult_patterns": [],
+
+  "_title_overrides": "Manual title mappings for stubborn cases",
+  "title_overrides": {
+  },
+
+  "_overrides_example": "Example: map season-only folder to correct show",
+  "_overrides_example_item": {"Сезон 1 (1984-1985)": "Miami Vice"},
+
+  "_keywords": "External keyword filter file (one pattern per line)",
+  "exclude_keywords_file": ""
 }

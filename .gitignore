@@ -11,6 +11,9 @@ logs/
 /robofuse
 dist/
 
+# Go build cache
+.gocache/
+
 # macOS
 .DS_Store
 
