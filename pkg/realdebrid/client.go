@@ -3,6 +3,7 @@ package realdebrid
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/robofuse/robofuse/internal/config"
 	"github.com/robofuse/robofuse/internal/logger"
@@ -21,6 +22,7 @@ type Client struct {
 	// HTTP clients with different rate limiters
 	generalClient  *request.Client
 	torrentsClient *request.Client
+	mediaClient    *request.Client // dedicated client for /streaming/mediaInfos (short timeout, no retries)
 
 	logger zerolog.Logger
 	config *config.Config
@@ -66,11 +68,22 @@ func New(cfg *config.Config) *Client {
 		request.WithRetryableStatus(429, 502, 503),
 	)
 
+	// Media info client — short timeout, no retries. /streaming/mediaInfos
+	// either responds quickly or not at all (503 = metadata unavailable).
+	mediaClient := request.New(
+		request.WithHeaders(headers),
+		request.WithRateLimiter(generalRL),
+		request.WithLogger(log),
+		request.WithTimeout(10 * time.Second),
+		request.WithMaxRetries(0),
+	)
+
 	return &Client{
 		Host:           "https://api.real-debrid.com/rest/1.0",
 		APIKey:         cfg.Token,
 		generalClient:  generalClient,
 		torrentsClient: torrentsClient,
+		mediaClient:    mediaClient,
 		logger:         log,
 		config:         cfg,
 	}

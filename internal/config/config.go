@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/robofuse/robofuse/pkg/matcher"
 )
 
 // config.go loads, validates, and exposes application configuration.
@@ -94,6 +95,42 @@ type MatchingConfig struct {
 	NoiseTokens            []string          `json:"-"`
 	TitleAliases           map[string]string `json:"-"`
 	TransliterationAliases map[string]string `json:"-"`
+}
+
+// ToMatcherConfig converts matching config to the matcher package format.
+func (m MatchingConfig) ToMatcherConfig() *matcher.Config {
+	compile := func(patterns []string) []*regexp.Regexp {
+		out := make([]*regexp.Regexp, 0, len(patterns))
+		for _, p := range patterns {
+			if re, err := regexp.Compile(p); err == nil {
+				out = append(out, re)
+			}
+		}
+		return out
+	}
+	def := matcher.DefaultConfig()
+	cfg := &matcher.Config{
+		StripPatterns:      def.StripPatterns,
+		AnimeKeywords:      def.AnimeKeywords,
+		CollectionKeywords: def.CollectionKeywords,
+		ForceMoviePatterns: def.ForceMoviePatterns,
+		MinScore:           def.MinScore,
+		MinScoreNoYear:     def.MinScoreNoYear,
+		MinMargin:          def.MinMargin,
+	}
+	if len(m.StripPatterns) > 0 {
+		cfg.StripPatterns = append(cfg.StripPatterns, compile(m.StripPatterns)...)
+	}
+	if len(m.AnimeKeywords) > 0 {
+		cfg.AnimeKeywords = m.AnimeKeywords
+	}
+	if len(m.CollectionKeywords) > 0 {
+		cfg.CollectionKeywords = m.CollectionKeywords
+	}
+	if len(m.ForceMoviePatterns) > 0 {
+		cfg.ForceMoviePatterns = compile(m.ForceMoviePatterns)
+	}
+	return cfg
 }
 
 // defaults returns a Config with default values
@@ -211,6 +248,10 @@ func Load(configPath string) (*Config, error) {
 	// Apply environment variable overrides (ROBOFUSE_*).
 	// These take precedence over file-based values.
 	if err := cfg.applyEnvOverrides(); err != nil {
+		return nil, err
+	}
+
+	if err := cfg.loadMatcherDictionaries(); err != nil {
 		return nil, err
 	}
 
